@@ -39,7 +39,7 @@ The original tools were written by **Doctor Who (Jiab77)**:
 - **nightmare** (v0.0.0) -- Bash string obfuscator using a Hex-to-Base82 chain that produces output resembling Base64 but failing every standard decoder.
 - **base82** -- Jiab77's custom encoding scheme (hosted on [Codeberg](https://codeberg.org/Jiab77/base82)), which is Base64 with a ROT13+ROT5 character substitution overlay.
 
-NightCloak is a ground-up Go rewrite. It is not a wrapper around the original scripts.
+NightCloak is a ground-up Go rewrite By **Me (NumeX)**. It is not a wrapper around the original scripts.
 
 ## Modernizations
 
