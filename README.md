@@ -2,7 +2,7 @@
 
 A statically-linked Go binary that unifies metadata steganography and string obfuscation into a single tool. NightCloak embeds encrypted payloads into file metadata (EXIF, ID3, Matroska, XMP) through a three-layer pipeline: obfuscation, authenticated encryption, and metadata injection.
 
-This project is a port and modernization of the original [cloak.sh](https://github.com/Jiab77) steganography tool and [nightmare](https://codeberg.org/Jiab77/base82) obfuscation tool created by **Doctor Who (Jiab77)**. The core logic, metadata wire format, and operational philosophy are preserved. The implementation is new.
+This project is a port and modernization of the original [cloak.sh](https://github.com/Jiab77/cloak) steganography tool and [nightmare](https://codeberg.org/Jiab77/nightmare) obfuscation tool created by **Doctor Who (Jiab77)**. The core logic, metadata wire format, and operational philosophy are preserved. The implementation is new.
 
 ## Demo
 
