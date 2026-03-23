@@ -158,11 +158,15 @@ echo "test" | nightcloak obfuscate - | nightcloak deobfuscate -
 
 ## Requirements
 
-| Dependency | Required for | Install |
-|---|---|---|
-| Go 1.25+ | Building from source | [golang.org](https://go.dev/dl/) |
-| `exiftool` | Embedding/extracting metadata (JPG, PNG, PDF, etc.) | `brew install exiftool` / `apt install libimage-exiftool-perl` |
-| `ffmpeg` / `ffprobe` | Embedding metadata in `.mp3`, `.avi`, `.ogg` containers | `brew install ffmpeg` / `apt install ffmpeg` |
+Pre-built binaries for macOS, Linux, and Windows are available on the [Releases](https://github.com/NumeXx/nightcloak/releases) page.
+
+The `obfuscate` and `deobfuscate` commands work standalone with zero dependencies. The `hide`, `reveal`, and `inspect` commands require exiftool and/or ffmpeg:
+
+| Dependency | Required for | macOS | Linux | Windows |
+|---|---|---|---|---|
+| Go 1.25+ | Building from source | [golang.org](https://go.dev/dl/) | [golang.org](https://go.dev/dl/) | [golang.org](https://go.dev/dl/) |
+| `exiftool` | Metadata (JPG, PNG, PDF, etc.) | `brew install exiftool` | `apt install libimage-exiftool-perl` | [exiftool.org](https://exiftool.org) |
+| `ffmpeg` / `ffprobe` | Metadata (MP3, AVI, OGG) | `brew install ffmpeg` | `apt install ffmpeg` | [ffmpeg.org](https://ffmpeg.org/download.html) |
 
 ## Tests
 
