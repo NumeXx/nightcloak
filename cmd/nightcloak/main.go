@@ -1,0 +1,427 @@
+package main
+
+import (
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"nightcloak/pkg/cloak"
+	"nightcloak/pkg/crypto"
+	"nightcloak/pkg/nightmare"
+)
+
+const version = "0.1.0"
+
+const banner = `
+    ╔╗╔╦═╗╔═╗╦ ╦╔╦╗╔═╗╦  ╔═╗╔═╗╦╔═
+    ║║║║ ╠╣ ╦╠═╣ ║ ║  ║  ║ ║╠═╣╠╩╗
+    ╝╚╝╩═╝╚═╝╩ ╩ ╩ ╚═╝╩═╝╚═╝╩ ╩╩ ╩
+    ─── nightmare + cloak ── v%s ───
+`
+
+func main() {
+	if len(os.Args) < 2 {
+		printUsage()
+		os.Exit(1)
+	}
+
+	switch os.Args[1] {
+	case "hide":
+		cmdHide(os.Args[2:])
+	case "reveal":
+		cmdReveal(os.Args[2:])
+	case "inspect":
+		cmdInspect(os.Args[2:])
+	case "dump":
+		cmdDump(os.Args[2:])
+	case "obfuscate":
+		cmdObfuscate(os.Args[2:])
+	case "deobfuscate":
+		cmdDeobfuscate(os.Args[2:])
+	case "-h", "--help", "help":
+		printHelp()
+	case "-v", "--version", "version":
+		fmt.Printf("nightcloak %s\n", version)
+	default:
+		die("unknown command: %s", os.Args[1])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// hide: nightmarify → encrypt → embed
+// ---------------------------------------------------------------------------
+
+func cmdHide(args []string) {
+	var password, output string
+	var keepOriginal bool
+	args = parseFlags(args, map[string]*string{
+		"-p": &password, "--password": &password,
+		"-o": &output, "--output": &output,
+	}, map[string]*bool{
+		"-k": &keepOriginal, "--keep": &keepOriginal,
+	})
+
+	if len(args) < 2 {
+		die("usage: nightcloak hide <carrier> <payload|file|-> [-p password] [-o output] [-k]")
+	}
+
+	carrierPath := args[0]
+	payloadArg := args[1]
+
+	if password == "" {
+		password = promptPassword("Enter password: ")
+	}
+
+	// Determine payload source: file, stdin, or inline string.
+	payload, payloadName, payloadType := resolvePayload(payloadArg)
+
+	// Step 1: Nightmarify (obfuscate).
+	obfuscated := nightmare.NightmarifyBytes(payload)
+
+	// Step 2: Encrypt.
+	encrypted, err := crypto.Encrypt([]byte(obfuscated), password)
+	if err != nil {
+		die("encryption failed: %v", err)
+	}
+
+	// Step 3: Embed via cloak.
+	opts := cloak.HideOpts{
+		CarrierPath: carrierPath,
+		OutputPath:  output,
+		Payload:     encrypted,
+		PayloadName: payloadName,
+		Type:        payloadType,
+	}
+	if keepOriginal && output == "" {
+		// Generate a default output path to avoid overwriting.
+		ext := filepath.Ext(carrierPath)
+		stem := strings.TrimSuffix(carrierPath, ext)
+		opts.OutputPath = stem + ".mod" + ext
+	}
+
+	if err := cloak.Hide(opts); err != nil {
+		die("embedding failed: %v", err)
+	}
+
+	target := opts.OutputPath
+	if target == "" {
+		target = carrierPath
+	}
+	log("Payload hidden in %s", target)
+}
+
+// ---------------------------------------------------------------------------
+// reveal: extract → decrypt → dreamify
+// ---------------------------------------------------------------------------
+
+func cmdReveal(args []string) {
+	var password, output string
+	args = parseFlags(args, map[string]*string{
+		"-p": &password, "--password": &password,
+		"-o": &output, "--output": &output,
+	}, map[string]*bool{})
+
+	if len(args) < 1 {
+		die("usage: nightcloak reveal <carrier> [-p password] [-o output]")
+	}
+
+	carrierPath := args[0]
+
+	if password == "" {
+		password = promptPassword("Enter password: ")
+	}
+
+	// Step 1: Extract via cloak.
+	result, err := cloak.Reveal(carrierPath)
+	if err != nil {
+		die("extraction failed: %v", err)
+	}
+
+	// Step 2: Decrypt.
+	decrypted, err := crypto.Decrypt(result.Payload, password)
+	if err != nil {
+		die("decryption failed: %v", err)
+	}
+
+	// Step 3: Dreamify (de-obfuscate).
+	clearBytes, err := nightmare.DreamifyBytes(string(decrypted))
+	if err != nil {
+		die("de-obfuscation failed: %v", err)
+	}
+
+	// Output.
+	if result.Type == cloak.PayloadFile && output == "" {
+		output = result.PayloadName
+	}
+
+	if output != "" {
+		if err := os.WriteFile(output, clearBytes, 0o644); err != nil {
+			die("writing output file: %v", err)
+		}
+		log("Extracted to %s (%d bytes)", output, len(clearBytes))
+	} else {
+		os.Stdout.Write(clearBytes)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// inspect: show file metadata tags
+// ---------------------------------------------------------------------------
+
+func cmdInspect(args []string) {
+	if len(args) < 1 {
+		die("usage: nightcloak inspect <file>")
+	}
+
+	data, err := cloak.Inspect(args[0])
+	if err != nil {
+		die("inspect failed: %v", err)
+	}
+	os.Stdout.Write(data)
+	fmt.Println()
+}
+
+// ---------------------------------------------------------------------------
+// dump: extract → decrypt → raw stdout (no de-obfuscation, no file write)
+// ---------------------------------------------------------------------------
+
+func cmdDump(args []string) {
+	var password string
+	args = parseFlags(args, map[string]*string{
+		"-p": &password, "--password": &password,
+	}, map[string]*bool{})
+
+	if len(args) < 1 {
+		die("usage: nightcloak dump <carrier> [-p password]")
+	}
+
+	carrierPath := args[0]
+
+	if password == "" {
+		password = promptPassword("Enter password: ")
+	}
+
+	// Step 1: Extract.
+	result, err := cloak.Reveal(carrierPath)
+	if err != nil {
+		die("extraction failed: %v", err)
+	}
+
+	// Step 2: Decrypt.
+	decrypted, err := crypto.Decrypt(result.Payload, password)
+	if err != nil {
+		die("decryption failed: %v", err)
+	}
+
+	// Dump raw decrypted bytes to stdout (still nightmarified).
+	os.Stdout.Write(decrypted)
+}
+
+// ---------------------------------------------------------------------------
+// obfuscate / deobfuscate: pure nightmare layer
+// ---------------------------------------------------------------------------
+
+func cmdObfuscate(args []string) {
+	if len(args) < 1 {
+		die("usage: nightcloak obfuscate <string|->")
+	}
+
+	input := readInlineOrStdin(args[0])
+	fmt.Print(nightmare.Nightmarify(input))
+}
+
+func cmdDeobfuscate(args []string) {
+	if len(args) < 1 {
+		die("usage: nightcloak deobfuscate <string|->")
+	}
+
+	input := readInlineOrStdin(args[0])
+	result, err := nightmare.Dreamify(input)
+	if err != nil {
+		die("de-obfuscation failed: %v", err)
+	}
+	fmt.Print(result)
+}
+
+// ---------------------------------------------------------------------------
+// payload resolution
+// ---------------------------------------------------------------------------
+
+func resolvePayload(arg string) (data []byte, name string, pt cloak.PayloadType) {
+	// Stdin.
+	if arg == "-" {
+		data, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			die("reading stdin: %v", err)
+		}
+		return data, "stdin", cloak.PayloadFile
+	}
+
+	info, statErr := os.Stat(arg)
+
+	// Directory → zip in-memory, then embed as file payload.
+	if statErr == nil && info.IsDir() {
+		log("Compressing folder %s...", arg)
+		zipData, zipName, err := cloak.ZipFolder(arg)
+		if err != nil {
+			die("compressing folder: %v", err)
+		}
+		log("Compressed to %s (%d bytes)", zipName, len(zipData))
+		return zipData, zipName, cloak.PayloadFile
+	}
+
+	// File.
+	if statErr == nil && !info.IsDir() {
+		data, err := os.ReadFile(arg)
+		if err != nil {
+			die("reading file %s: %v", arg, err)
+		}
+		return data, filepath.Base(arg), cloak.PayloadFile
+	}
+
+	// Inline string.
+	return []byte(arg), "", cloak.PayloadString
+}
+
+func readInlineOrStdin(arg string) string {
+	if arg == "-" {
+		data, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			die("reading stdin: %v", err)
+		}
+		return strings.TrimRight(string(data), "\n")
+	}
+	return arg
+}
+
+// ---------------------------------------------------------------------------
+// flag parsing (zero-dependency, handles intermixed flags and positionals)
+// ---------------------------------------------------------------------------
+
+func parseFlags(args []string, strFlags map[string]*string, boolFlags map[string]*bool) []string {
+	var positional []string
+	for i := 0; i < len(args); i++ {
+		if dest, ok := strFlags[args[i]]; ok {
+			if i+1 >= len(args) {
+				die("flag %s requires a value", args[i])
+			}
+			i++
+			*dest = args[i]
+		} else if dest, ok := boolFlags[args[i]]; ok {
+			*dest = true
+		} else if args[i] == "--" {
+			positional = append(positional, args[i+1:]...)
+			break
+		} else {
+			positional = append(positional, args[i])
+		}
+	}
+	return positional
+}
+
+// ---------------------------------------------------------------------------
+// password prompt
+// ---------------------------------------------------------------------------
+
+func promptPassword(prompt string) string {
+	fmt.Fprint(os.Stderr, prompt)
+	var pw string
+	fmt.Scanln(&pw)
+	if pw == "" {
+		die("password cannot be empty")
+	}
+	return pw
+}
+
+// ---------------------------------------------------------------------------
+// output helpers
+// ---------------------------------------------------------------------------
+
+func printUsage() {
+	fmt.Fprintf(os.Stderr, banner, version)
+	fmt.Fprintln(os.Stderr, `
+  Usage: nightcloak <command> [options]
+
+  Commands:
+    hide          Obfuscate, encrypt, and embed payload in a carrier file
+    reveal        Extract, decrypt, and de-obfuscate payload from carrier
+    inspect       Show file metadata tags (no decryption)
+    dump          Extract and decrypt to stdout (raw, no de-obfuscation)
+    obfuscate     Pure nightmare encoding (no encryption)
+    deobfuscate   Reverse nightmare encoding
+
+  Run 'nightcloak <command> --help' or 'nightcloak help' for details.`)
+}
+
+func printHelp() {
+	fmt.Fprintf(os.Stderr, banner, version)
+	fmt.Fprintln(os.Stderr, `
+  Usage: nightcloak <command> [options]
+
+  Commands:
+
+    hide <carrier> <payload|file|folder|-> [flags]
+        Obfuscate → Encrypt → Embed payload into carrier file metadata.
+        Folders are automatically zipped before embedding.
+
+        -p, --password <pw>   Encryption password (prompted if omitted)
+        -o, --output <path>   Write to path instead of replacing carrier
+        -k, --keep            Keep original carrier (auto-generates output path)
+
+        Examples:
+          nightcloak hide photo.jpg "secret message" -p mypass
+          nightcloak hide photo.jpg secret.txt -p mypass
+          nightcloak hide photo.jpg ./secret_folder/ -p mypass -k
+          cat payload.bin | nightcloak hide photo.jpg - -p mypass
+
+    reveal <carrier> [flags]
+        Extract → Decrypt → De-obfuscate payload from carrier file.
+
+        -p, --password <pw>   Decryption password (prompted if omitted)
+        -o, --output <path>   Write to path instead of stdout/original name
+
+        Examples:
+          nightcloak reveal photo.jpg -p mypass
+          nightcloak reveal photo.jpg -p mypass -o recovered.txt
+
+    inspect <file>
+        Show all metadata tags from a file (no decryption).
+
+        Examples:
+          nightcloak inspect photo.jpg
+
+    dump <carrier> [-p password]
+        Extract and decrypt to stdout without de-obfuscation.
+        Useful for debugging or piping raw decrypted data.
+
+        Examples:
+          nightcloak dump photo.jpg -p mypass
+          nightcloak dump photo.jpg -p mypass | file -
+
+    obfuscate <string|->
+        Pure nightmare encoding (hex → base82). No encryption.
+
+        Examples:
+          nightcloak obfuscate "hello world"
+          echo "hello" | nightcloak obfuscate -
+
+    deobfuscate <string|->
+        Reverse nightmare encoding.
+
+        Examples:
+          nightcloak deobfuscate "Awt7AGMwAzZ7Mt=="
+          echo "Awt7AGMwAzZ7Mt==" | nightcloak deobfuscate -
+
+  Requires: exiftool (most formats), ffmpeg/ffprobe (mp3/avi/ogg)`)
+}
+
+func log(format string, args ...interface{}) {
+	fmt.Fprintf(os.Stderr, "  [*] "+format+"\n", args...)
+}
+
+func die(format string, args ...interface{}) {
+	fmt.Fprintf(os.Stderr, "  [!] Error: "+format+"\n", args...)
+	os.Exit(1)
+}
