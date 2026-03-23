@@ -205,4 +205,5 @@ This tool is intended for authorized security testing, research, and educational
 
 ## Credits
 
+- **Me (NumeX)** -- Go complete rewrite
 - **Doctor Who (Jiab77)** -- Original author of `cloak.sh`, `nightmare`, and `base82`.
