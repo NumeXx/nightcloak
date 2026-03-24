@@ -31,7 +31,8 @@ This project is a port and modernization of the original [cloak.sh](https://gith
   Cloak layer routing:
     .png ──> native Go tEXt chunk injection (zero dependencies)
     .jpg/.jpeg ──> native Go EXIF APP1 UserComment injection (zero dependencies)
-    .mp3/.avi/.ogg ──> ffmpeg FFMETADATA1
+    .mp3 ──> native Go ID3v2 TXXX injection (zero dependencies)
+    .avi/.ogg ──> ffmpeg FFMETADATA1
     everything else ──> exiftool -@ - (stdin stream)
 ```
 
@@ -85,6 +86,7 @@ For PNG and JPEG files, NightCloak bypasses `exiftool` entirely and performs sur
 - **PNG:** Injects a tEXt chunk before the IEND marker. The injector streams the file chunk-by-chunk without loading the full carrier into memory.
 - **JPEG (Stealth/Default):** Constructs a parallel APP1 segment containing a valid TIFF/EXIF structure with the payload stored in the UserComment (0x9286) tag. The TIFF uses Big Endian (MM) byte order with a minimal IFD chain: IFD0 -> ExifIFDPointer -> EXIF sub-IFD -> UserComment. The UserComment uses the undefined charset prefix (`\0` x 8), making the binary payload indistinguishable from camera-vendor encoded comments (Sony, Canon, Nikon all write binary UserComment data). For payloads exceeding ~65KB, multiple APP1 segments are chained. Existing camera EXIF data is left untouched.
 - **JPEG (COM):** The COM (0xFFFE) segment injector remains available in `pkg/cloak/native/jpeg.go` for direct use. COM segments are simpler but more conspicuous to forensic analysis.
+- **MP3:** Injects a TXXX (user-defined text) frame into the ID3v2 tag with the description `ENCODEDBY`. Handles both ID3v2.3 (standard sizes) and ID3v2.4 (syncsafe sizes). If the existing tag has sufficient padding, the frame is written in-place without shifting audio data. If no ID3v2 tag exists, one is created from scratch. Existing metadata frames (title, artist, album) are preserved.
 
 **Password-derived sentinel:** Payloads are not identified by a static string like `"Modified by Cloak"`. Instead, a 16-byte sentinel is derived from the user's password using HMAC-SHA256. The extractor recomputes the sentinel and scans metadata segments for a match. Without the correct password, there is no fixed signature for EDR, AV, or forensic tools to scan for -- the payload is indistinguishable from arbitrary metadata.
 
@@ -183,8 +185,8 @@ The `obfuscate` and `deobfuscate` commands work standalone with zero dependencie
 | Dependency | Required for | macOS | Linux | Windows |
 |---|---|---|---|---|
 | Go 1.25+ | Building from source | [golang.org](https://go.dev/dl/) | [golang.org](https://go.dev/dl/) | [golang.org](https://go.dev/dl/) |
-| `exiftool` | Metadata (PDF, TIFF, etc.) -- not needed for PNG or JPEG | `brew install exiftool` | `apt install libimage-exiftool-perl` | [exiftool.org](https://exiftool.org) |
-| `ffmpeg` / `ffprobe` | Metadata (MP3, AVI, OGG) | `brew install ffmpeg` | `apt install ffmpeg` | [ffmpeg.org](https://ffmpeg.org/download.html) |
+| `exiftool` | Metadata (PDF, TIFF, etc.) -- not needed for PNG, JPEG, or MP3 | `brew install exiftool` | `apt install libimage-exiftool-perl` | [exiftool.org](https://exiftool.org) |
+| `ffmpeg` / `ffprobe` | Metadata (AVI, OGG) -- not needed for PNG, JPEG, or MP3 | `brew install ffmpeg` | `apt install ffmpeg` | [ffmpeg.org](https://ffmpeg.org/download.html) |
 
 ## Tests
 
@@ -192,12 +194,12 @@ The `obfuscate` and `deobfuscate` commands work standalone with zero dependencie
 go test ./... -v
 ```
 
-63 tests across four packages:
+73 tests across four packages:
 
 - `pkg/nightmare` -- ROT13/5 self-inverse property, known character mappings, encode/decode roundtrips, output format validation.
 - `pkg/crypto` -- Encrypt/decrypt roundtrips (unicode, binary, 100KB payloads), wrong password rejection, ciphertext uniqueness, tamper detection, wire format verification.
 - `pkg/cloak` -- Description tag parsing (file, string, malformed, PDF workaround), validation, zip compression (with subdirectories), integration tests with real exiftool (auto-skipped if not installed).
-- `pkg/cloak/native` -- PNG, JPEG COM, and JPEG EXIF inject/extract roundtrips, wrong password rejection, large payload chaining (150-200KB), binary payload, image data preservation, COM+EXIF coexistence, sentinel determinism. All self-contained -- no external tools required.
+- `pkg/cloak/native` -- PNG, JPEG COM, JPEG EXIF, and MP3 ID3v2 inject/extract roundtrips, wrong password rejection, large payload chaining, binary payload, image/audio data preservation, padding optimization, frame replacement, syncsafe integer encoding, COM+EXIF coexistence, sentinel determinism. All self-contained -- no external tools required.
 
 ## Compatibility
 
@@ -219,6 +221,7 @@ pkg/cloak/cloak.go              Hide/Reveal/Inspect/ZipFolder, format routing
 pkg/cloak/native/png.go         Native PNG tEXt chunk injection/extraction (zero deps)
 pkg/cloak/native/jpeg.go        Native JPEG COM segment injection/extraction (zero deps)
 pkg/cloak/native/exif.go        Native JPEG APP1/EXIF UserComment injection/extraction (zero deps)
+pkg/cloak/native/mp3.go         Native MP3 ID3v2 TXXX injection/extraction (zero deps)
 ```
 
 ## Roadmap
@@ -232,12 +235,13 @@ NightCloak is progressively replacing external tool dependencies with native Go 
 - **PNG** -- Done (v0.2.0). Surgical tEXt chunk injection with password-derived sentinel.
 - **JPEG COM** -- Done (v0.3.0). COM segment injection with automatic chaining for large payloads.
 - **JPEG APP1/EXIF** -- Done (v0.4.0). Parallel APP1 with valid TIFF/EXIF structure. Payload in UserComment tag with undefined charset. Default for all JPEG operations.
+- **MP3** -- Done (v0.5.0). ID3v2 TXXX frame injection with padding optimization. Handles v2.3 and v2.4. FFmpeg no longer required for MP3 files.
 
 **Goals:**
 
 - Zero child-process footprint for supported formats. No `exiftool` or `ffmpeg` in the process tree.
 - In-memory binary parsing via `io.Reader`/`io.Writer` interfaces. No temporary files.
-- Fully static, fully portable. External tools remain as a fallback for formats not yet handled natively (MP3, AVI, PDF).
+- Fully static, fully portable. External tools remain as a fallback for formats not yet handled natively (AVI, OGG, PDF).
 
 ## Disclaimer
 

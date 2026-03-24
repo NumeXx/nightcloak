@@ -3,6 +3,7 @@ package native
 import (
 	"bytes"
 	"crypto/hmac"
+	"encoding/binary"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -555,5 +556,249 @@ func TestExif_COMAndExifIndependent(t *testing.T) {
 	}
 	if string(exifResult) != "exif-payload" {
 		t.Errorf("EXIF payload = %q, want %q", exifResult, "exif-payload")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// MP3 (ID3v2) tests
+// ---------------------------------------------------------------------------
+
+// createTestMP3 generates a minimal MP3 file: just a valid MPEG audio frame
+// (Layer 3, 128kbps, 44100Hz, stereo, silent). No ID3v2 tag.
+func createTestMP3NoTag(t *testing.T) []byte {
+	t.Helper()
+	// Valid MPEG1 Layer3 frame header: 0xFFFB9004
+	// FF FB = sync + MPEG1 Layer3, 90 = 128kbps 44100Hz, 04 = stereo padded
+	// Frame size = 144 * 128000 / 44100 + 1 = 418 bytes
+	frame := make([]byte, 418)
+	frame[0] = 0xFF
+	frame[1] = 0xFB
+	frame[2] = 0x90
+	frame[3] = 0x04
+	return frame
+}
+
+// createTestMP3WithTag generates an MP3 with an existing ID3v2.3 tag
+// containing a TIT2 (title) frame and padding.
+func createTestMP3WithTag(t *testing.T) []byte {
+	t.Helper()
+
+	// Build a TIT2 frame: encoding(1) + "Test Title"
+	title := []byte("Test Title")
+	tit2Data := make([]byte, 1+len(title))
+	tit2Data[0] = 0x00 // ISO-8859-1
+	copy(tit2Data[1:], title)
+
+	tit2Frame := make([]byte, frameHeaderV23+len(tit2Data))
+	copy(tit2Frame[0:4], "TIT2")
+	binary.BigEndian.PutUint32(tit2Frame[4:8], uint32(len(tit2Data)))
+
+	copy(tit2Frame[frameHeaderV23:], tit2Data)
+
+	// Tag = TIT2 frame + 2048 bytes padding.
+	padding := make([]byte, 2048)
+	tagBody := append(tit2Frame, padding...)
+
+	tagSize := encodeSyncsafe(uint32(len(tagBody)))
+	header := []byte{
+		'I', 'D', '3',
+		0x03, 0x00, // v2.3
+		0x00,       // no flags
+		tagSize[0], tagSize[1], tagSize[2], tagSize[3],
+	}
+
+	// Audio frame after the tag.
+	audio := createTestMP3NoTag(t)
+
+	var buf bytes.Buffer
+	buf.Write(header)
+	buf.Write(tagBody)
+	buf.Write(audio)
+	return buf.Bytes()
+}
+
+func TestMP3_InjectExtract_NoExistingTag(t *testing.T) {
+	carrier := createTestMP3NoTag(t)
+	payload := []byte("MP3 native injection without existing tag")
+	password := "mp3pass"
+
+	var injected bytes.Buffer
+	err := MP3Inject(bytes.NewReader(carrier), &injected, payload, password)
+	if err != nil {
+		t.Fatalf("MP3Inject error: %v", err)
+	}
+
+	// Verify ID3v2 header was created.
+	result := injected.Bytes()
+	if string(result[0:3]) != "ID3" {
+		t.Fatal("injected MP3 does not start with ID3 header")
+	}
+
+	extracted, err := MP3Extract(bytes.NewReader(result), password)
+	if err != nil {
+		t.Fatalf("MP3Extract error: %v", err)
+	}
+	if !bytes.Equal(extracted, payload) {
+		t.Errorf("payload mismatch: got %q, want %q", extracted, payload)
+	}
+
+	// Verify audio data is preserved at the end.
+	// The audio should be findable after the ID3 tag.
+	tagSize := decodeSyncsafe(result[6:10])
+	audioStart := id3HeaderSize + int(tagSize)
+	if audioStart+4 > len(result) {
+		t.Fatal("audio data missing after ID3 tag")
+	}
+	if result[audioStart] != 0xFF || result[audioStart+1] != 0xFB {
+		t.Errorf("MPEG sync not found at expected position %d", audioStart)
+	}
+}
+
+func TestMP3_InjectExtract_ExistingTag(t *testing.T) {
+	carrier := createTestMP3WithTag(t)
+	payload := []byte("injected into existing tag")
+	password := "existpass"
+
+	var injected bytes.Buffer
+	err := MP3Inject(bytes.NewReader(carrier), &injected, payload, password)
+	if err != nil {
+		t.Fatalf("MP3Inject error: %v", err)
+	}
+
+	extracted, err := MP3Extract(bytes.NewReader(injected.Bytes()), password)
+	if err != nil {
+		t.Fatalf("MP3Extract error: %v", err)
+	}
+	if !bytes.Equal(extracted, payload) {
+		t.Errorf("payload mismatch: got %q, want %q", extracted, payload)
+	}
+}
+
+func TestMP3_PreservesExistingFrames(t *testing.T) {
+	carrier := createTestMP3WithTag(t)
+
+	var injected bytes.Buffer
+	MP3Inject(bytes.NewReader(carrier), &injected, []byte("test"), "pass")
+
+	result := injected.Bytes()
+	tagSize := decodeSyncsafe(result[6:10])
+	tagBody := result[id3HeaderSize : id3HeaderSize+int(tagSize)]
+
+	// Walk frames, verify TIT2 is still there.
+	foundTIT2 := false
+	pos := uint32(0)
+	for pos+frameHeaderV23 <= uint32(len(tagBody)) {
+		if tagBody[pos] == 0x00 {
+			break
+		}
+		frameID := string(tagBody[pos : pos+4])
+		frameSize := binary.BigEndian.Uint32(tagBody[pos+4 : pos+8])
+		if frameID == "TIT2" {
+			foundTIT2 = true
+		}
+		pos += frameHeaderV23 + frameSize
+	}
+	if !foundTIT2 {
+		t.Error("existing TIT2 frame was lost after injection")
+	}
+}
+
+func TestMP3_WrongPassword(t *testing.T) {
+	carrier := createTestMP3NoTag(t)
+
+	var injected bytes.Buffer
+	MP3Inject(bytes.NewReader(carrier), &injected, []byte("secret"), "correct")
+
+	_, err := MP3Extract(bytes.NewReader(injected.Bytes()), "wrong")
+	if err == nil {
+		t.Fatal("expected error for wrong password")
+	}
+}
+
+func TestMP3_NoPayload(t *testing.T) {
+	carrier := createTestMP3WithTag(t)
+
+	_, err := MP3Extract(bytes.NewReader(carrier), "anypass")
+	if err == nil {
+		t.Fatal("expected error for MP3 without nightcloak data")
+	}
+}
+
+func TestMP3_PaddingOptimization(t *testing.T) {
+	carrier := createTestMP3WithTag(t) // has 2048 bytes padding
+	origTagSize := decodeSyncsafe(carrier[6:10])
+
+	// Small payload should fit in existing padding without expanding.
+	var injected bytes.Buffer
+	MP3Inject(bytes.NewReader(carrier), &injected, []byte("small"), "pass")
+
+	result := injected.Bytes()
+	newTagSize := decodeSyncsafe(result[6:10])
+
+	if newTagSize != origTagSize {
+		t.Errorf("tag size changed from %d to %d — padding should have been sufficient", origTagSize, newTagSize)
+	}
+}
+
+func TestMP3_ReplaceExistingPayload(t *testing.T) {
+	carrier := createTestMP3WithTag(t)
+
+	// Inject first payload.
+	var first bytes.Buffer
+	MP3Inject(bytes.NewReader(carrier), &first, []byte("first"), "pass")
+
+	// Inject second payload (should replace the first TXXX:ENCODEDBY).
+	var second bytes.Buffer
+	MP3Inject(bytes.NewReader(first.Bytes()), &second, []byte("second"), "pass")
+
+	extracted, err := MP3Extract(bytes.NewReader(second.Bytes()), "pass")
+	if err != nil {
+		t.Fatalf("MP3Extract error: %v", err)
+	}
+	if string(extracted) != "second" {
+		t.Errorf("expected 'second', got %q", extracted)
+	}
+}
+
+func TestMP3_InvalidFile(t *testing.T) {
+	notMP3 := []byte("this is not an MP3 file")
+
+	_, err := MP3Extract(bytes.NewReader(notMP3), "pass")
+	if err == nil {
+		t.Fatal("expected error for non-MP3")
+	}
+}
+
+func TestMP3_AudioDataIntact(t *testing.T) {
+	audio := createTestMP3NoTag(t)
+
+	var injected bytes.Buffer
+	MP3Inject(bytes.NewReader(audio), &injected, []byte("payload"), "pass")
+
+	result := injected.Bytes()
+	tagSize := decodeSyncsafe(result[6:10])
+	audioStart := id3HeaderSize + int(tagSize)
+
+	// The audio data after the tag should be identical to the original.
+	recoveredAudio := result[audioStart:]
+	if !bytes.Equal(recoveredAudio, audio) {
+		t.Error("audio data was modified during injection")
+	}
+}
+
+func TestSyncsafe_RoundTrip(t *testing.T) {
+	cases := []uint32{0, 1, 127, 128, 16383, 16384, 268435455}
+	for _, v := range cases {
+		encoded := encodeSyncsafe(v)
+		decoded := decodeSyncsafe(encoded[:])
+		if decoded != v {
+			t.Errorf("syncsafe roundtrip failed for %d: encoded %v, decoded %d", v, encoded, decoded)
+		}
+		// Verify no byte has high bit set.
+		for i, b := range encoded {
+			if b&0x80 != 0 {
+				t.Errorf("syncsafe byte %d has high bit set for value %d: %02x", i, v, b)
+			}
+		}
 	}
 }

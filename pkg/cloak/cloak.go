@@ -83,15 +83,14 @@ type RevealResult struct {
 
 // ffmpegExtensions are routed to the ffmpeg code path for embedding.
 var ffmpegExtensions = map[string]bool{
-	".mp3": true,
 	".avi": true,
 	".ogg": true,
 }
 
 // Hide embeds a payload into the carrier file's metadata tags.
 //
-// Routing: .png and .jpg/.jpeg use native Go injectors (zero external deps).
-// .mp3/.avi/.ogg files use ffmpeg with FFMETADATA1.
+// Routing: .png, .jpg/.jpeg, and .mp3 use native Go injectors (zero external deps).
+// .avi/.ogg files use ffmpeg with FFMETADATA1.
 // All other files use exiftool with the streaming -@ - pattern.
 func Hide(opts HideOpts) error {
 	if err := validateHideOpts(opts); err != nil {
@@ -104,6 +103,8 @@ func Hide(opts HideOpts) error {
 		return hidePNGNative(opts)
 	case ext == ".jpg" || ext == ".jpeg":
 		return hideJPEGExifNative(opts)
+	case ext == ".mp3":
+		return hideMP3Native(opts)
 	case ffmpegExtensions[ext]:
 		return hideFF(opts)
 	default:
@@ -113,8 +114,8 @@ func Hide(opts HideOpts) error {
 
 // Reveal extracts the payload from a carrier file's metadata.
 //
-// Routing: .png and .jpg/.jpeg use native Go extractors.
-// All other files use exiftool (matching original cloak.sh behavior).
+// Routing: .png, .jpg/.jpeg, and .mp3 use native Go extractors.
+// All other files use exiftool.
 func Reveal(carrierPath string, password string) (*RevealResult, error) {
 	ext := strings.ToLower(filepath.Ext(carrierPath))
 	switch {
@@ -122,6 +123,8 @@ func Reveal(carrierPath string, password string) (*RevealResult, error) {
 		return revealPNGNative(carrierPath, password)
 	case ext == ".jpg" || ext == ".jpeg":
 		return revealJPEGExifNative(carrierPath, password)
+	case ext == ".mp3":
+		return revealMP3Native(carrierPath, password)
 	default:
 		return revealEX(carrierPath)
 	}
@@ -208,6 +211,49 @@ func revealJPEGNative(carrierPath string, password string) (*RevealResult, error
 	defer f.Close()
 
 	wirePayload, err := native.JPEGExtract(f, password)
+	if err != nil {
+		return nil, err
+	}
+
+	return parseDescription(string(wirePayload))
+}
+
+// ---------------------------------------------------------------------------
+// native MP3 path: ID3v2 TXXX injection
+// ---------------------------------------------------------------------------
+
+func hideMP3Native(opts HideOpts) error {
+	outputPath := resolveOutput(opts)
+	wirePayload := buildWirePayload(opts)
+
+	src, err := os.Open(opts.CarrierPath)
+	if err != nil {
+		return fmt.Errorf("opening carrier: %w", err)
+	}
+	defer src.Close()
+
+	dst, err := os.Create(outputPath)
+	if err != nil {
+		return fmt.Errorf("creating output: %w", err)
+	}
+	defer dst.Close()
+
+	if err := native.MP3Inject(src, dst, wirePayload, opts.Password); err != nil {
+		os.Remove(outputPath)
+		return fmt.Errorf("native MP3 injection: %w", err)
+	}
+
+	return replaceIfNeeded(opts, outputPath)
+}
+
+func revealMP3Native(carrierPath string, password string) (*RevealResult, error) {
+	f, err := os.Open(carrierPath)
+	if err != nil {
+		return nil, fmt.Errorf("opening carrier: %w", err)
+	}
+	defer f.Close()
+
+	wirePayload, err := native.MP3Extract(f, password)
 	if err != nil {
 		return nil, err
 	}

@@ -275,8 +275,8 @@ func TestZipFolder_NonExistent(t *testing.T) {
 }
 
 func TestFfmpegExtensions(t *testing.T) {
-	yes := []string{".mp3", ".avi", ".ogg"}
-	no := []string{".jpg", ".png", ".pdf", ".gif", ".MP3"}
+	yes := []string{".avi", ".ogg"}
+	no := []string{".jpg", ".png", ".pdf", ".gif", ".mp3", ".MP3"}
 
 	for _, ext := range yes {
 		if !ffmpegExtensions[ext] {
