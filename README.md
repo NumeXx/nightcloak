@@ -199,6 +199,23 @@ pkg/crypto/crypto.go            ChaCha20-Poly1305 AEAD with PBKDF2 key derivatio
 pkg/cloak/cloak.go              Hide/Reveal/Inspect/ZipFolder, exiftool and ffmpeg paths
 ```
 
+## Roadmap
+
+### Native Metadata Injection (Zero-Dependency Mode)
+
+NightCloak currently shells out to `exiftool` and `ffmpeg` for metadata operations. The next phase is to replace these external orchestrators with native Go parsers that manipulate file metadata directly in the byte stream.
+
+**Target formats:**
+
+- **JPEG** -- Surgical injection into COM (comment) and APP1 (EXIF) segments. These segments sit between SOI and SOS markers and can be inserted or replaced without re-encoding image data.
+- **PNG** -- Write payloads into tEXt or zTXt ancillary chunks. PNG readers are required to ignore unrecognized ancillary chunks, making this a clean injection point.
+
+**Goals:**
+
+- Zero child-process footprint. No `exiftool` or `ffmpeg` in the process tree. The binary operates entirely in-process with no fork/exec calls for supported formats.
+- In-memory binary parsing. Metadata segments are read and written directly on the byte stream using Go's `io.Reader`/`io.Writer` interfaces. No temporary files, no disk I/O beyond the carrier file itself.
+- Fully static, fully portable. The resulting binary runs on any Linux, macOS, or Windows system without runtime dependencies for supported formats. External tools remain available as a fallback for formats not yet handled natively (MP3, AVI, PDF).
+
 ## Disclaimer
 
 This tool is intended for authorized security testing, research, and educational purposes. Use it responsibly and in compliance with applicable laws. The authors are not responsible for misuse.
