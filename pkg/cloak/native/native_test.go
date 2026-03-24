@@ -388,3 +388,172 @@ func TestJPEG_ImageDataPreserved(t *testing.T) {
 		t.Errorf("image dimensions changed: %v vs %v", orig.Bounds(), decoded.Bounds())
 	}
 }
+
+// ---------------------------------------------------------------------------
+// JPEG EXIF (APP1) tests
+// ---------------------------------------------------------------------------
+
+func TestExif_InjectExtract_RoundTrip(t *testing.T) {
+	carrier := createTestJPEG(t)
+	payload := []byte("stealth EXIF payload via UserComment")
+	password := "exifpass"
+
+	var injected bytes.Buffer
+	err := JPEGExifInject(bytes.NewReader(carrier), &injected, payload, password)
+	if err != nil {
+		t.Fatalf("JPEGExifInject error: %v", err)
+	}
+
+	// Still a valid JPEG.
+	_, err = jpeg.Decode(bytes.NewReader(injected.Bytes()))
+	if err != nil {
+		t.Fatalf("injected JPEG is not valid: %v", err)
+	}
+
+	extracted, err := JPEGExifExtract(bytes.NewReader(injected.Bytes()), password)
+	if err != nil {
+		t.Fatalf("JPEGExifExtract error: %v", err)
+	}
+	if !bytes.Equal(extracted, payload) {
+		t.Errorf("payload mismatch: got %q, want %q", extracted, payload)
+	}
+}
+
+func TestExif_WrongPassword(t *testing.T) {
+	carrier := createTestJPEG(t)
+
+	var injected bytes.Buffer
+	JPEGExifInject(bytes.NewReader(carrier), &injected, []byte("secret"), "correct")
+
+	_, err := JPEGExifExtract(bytes.NewReader(injected.Bytes()), "wrong")
+	if err == nil {
+		t.Fatal("expected error for wrong password")
+	}
+}
+
+func TestExif_NoPayload(t *testing.T) {
+	carrier := createTestJPEG(t)
+
+	_, err := JPEGExifExtract(bytes.NewReader(carrier), "anypass")
+	if err == nil {
+		t.Fatal("expected error for clean JPEG")
+	}
+}
+
+func TestExif_LargePayload(t *testing.T) {
+	carrier := createTestJPEG(t)
+
+	// 150KB payload — requires multiple APP1 segments.
+	payload := make([]byte, 150_000)
+	for i := range payload {
+		payload[i] = byte(i % 256)
+	}
+
+	var injected bytes.Buffer
+	err := JPEGExifInject(bytes.NewReader(carrier), &injected, payload, "bigexif")
+	if err != nil {
+		t.Fatalf("JPEGExifInject error: %v", err)
+	}
+
+	_, err = jpeg.Decode(bytes.NewReader(injected.Bytes()))
+	if err != nil {
+		t.Fatalf("injected JPEG is not valid: %v", err)
+	}
+
+	extracted, err := JPEGExifExtract(bytes.NewReader(injected.Bytes()), "bigexif")
+	if err != nil {
+		t.Fatalf("JPEGExifExtract error: %v", err)
+	}
+	if !bytes.Equal(extracted, payload) {
+		t.Errorf("large payload mismatch: got %d bytes, want %d", len(extracted), len(payload))
+	}
+}
+
+func TestExif_BinaryPayload(t *testing.T) {
+	carrier := createTestJPEG(t)
+	payload := make([]byte, 256)
+	for i := range payload {
+		payload[i] = byte(i)
+	}
+
+	var injected bytes.Buffer
+	JPEGExifInject(bytes.NewReader(carrier), &injected, payload, "binexif")
+
+	extracted, err := JPEGExifExtract(bytes.NewReader(injected.Bytes()), "binexif")
+	if err != nil {
+		t.Fatalf("JPEGExifExtract error: %v", err)
+	}
+	if !bytes.Equal(extracted, payload) {
+		t.Error("binary payload roundtrip failed")
+	}
+}
+
+func TestExif_InvalidFile(t *testing.T) {
+	notJPEG := []byte("not a jpeg")
+
+	var out bytes.Buffer
+	err := JPEGExifInject(bytes.NewReader(notJPEG), &out, []byte("x"), "pass")
+	if err == nil {
+		t.Fatal("expected error for non-JPEG")
+	}
+
+	_, err = JPEGExifExtract(bytes.NewReader(notJPEG), "pass")
+	if err == nil {
+		t.Fatal("expected error for non-JPEG")
+	}
+}
+
+func TestExif_PreservesExistingAPP1(t *testing.T) {
+	carrier := createTestJPEG(t)
+
+	// Inject via EXIF.
+	var injected bytes.Buffer
+	JPEGExifInject(bytes.NewReader(carrier), &injected, []byte("test"), "pass")
+
+	// The original JPEG may have APP0 (JFIF). Verify the image still decodes
+	// and dimensions are preserved.
+	orig, _ := jpeg.Decode(bytes.NewReader(carrier))
+	decoded, err := jpeg.Decode(bytes.NewReader(injected.Bytes()))
+	if err != nil {
+		t.Fatalf("decoding failed: %v", err)
+	}
+	if orig.Bounds() != decoded.Bounds() {
+		t.Errorf("dimensions changed: %v vs %v", orig.Bounds(), decoded.Bounds())
+	}
+}
+
+func TestExif_COMAndExifIndependent(t *testing.T) {
+	// Inject via COM, then via EXIF with different passwords.
+	// Both should be independently extractable.
+	carrier := createTestJPEG(t)
+
+	var withCOM bytes.Buffer
+	JPEGInject(bytes.NewReader(carrier), &withCOM, []byte("com-payload"), "compass")
+
+	var withBoth bytes.Buffer
+	JPEGExifInject(bytes.NewReader(withCOM.Bytes()), &withBoth, []byte("exif-payload"), "exifpass")
+
+	// Still valid.
+	_, err := jpeg.Decode(bytes.NewReader(withBoth.Bytes()))
+	if err != nil {
+		t.Fatalf("JPEG with both COM and EXIF is invalid: %v", err)
+	}
+
+	// Extract COM.
+	comResult, err := JPEGExtract(bytes.NewReader(withBoth.Bytes()), "compass")
+	if err != nil {
+		t.Fatalf("COM extraction failed: %v", err)
+	}
+	if string(comResult) != "com-payload" {
+		t.Errorf("COM payload = %q, want %q", comResult, "com-payload")
+	}
+
+	// Extract EXIF.
+	exifResult, err := JPEGExifExtract(bytes.NewReader(withBoth.Bytes()), "exifpass")
+	if err != nil {
+		t.Fatalf("EXIF extraction failed: %v", err)
+	}
+	if string(exifResult) != "exif-payload" {
+		t.Errorf("EXIF payload = %q, want %q", exifResult, "exif-payload")
+	}
+}

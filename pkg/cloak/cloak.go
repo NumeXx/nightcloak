@@ -103,7 +103,7 @@ func Hide(opts HideOpts) error {
 	case ext == ".png":
 		return hidePNGNative(opts)
 	case ext == ".jpg" || ext == ".jpeg":
-		return hideJPEGNative(opts)
+		return hideJPEGExifNative(opts)
 	case ffmpegExtensions[ext]:
 		return hideFF(opts)
 	default:
@@ -121,7 +121,7 @@ func Reveal(carrierPath string, password string) (*RevealResult, error) {
 	case ext == ".png":
 		return revealPNGNative(carrierPath, password)
 	case ext == ".jpg" || ext == ".jpeg":
-		return revealJPEGNative(carrierPath, password)
+		return revealJPEGExifNative(carrierPath, password)
 	default:
 		return revealEX(carrierPath)
 	}
@@ -208,6 +208,49 @@ func revealJPEGNative(carrierPath string, password string) (*RevealResult, error
 	defer f.Close()
 
 	wirePayload, err := native.JPEGExtract(f, password)
+	if err != nil {
+		return nil, err
+	}
+
+	return parseDescription(string(wirePayload))
+}
+
+// ---------------------------------------------------------------------------
+// native JPEG EXIF path: stealth mode via UserComment tag
+// ---------------------------------------------------------------------------
+
+func hideJPEGExifNative(opts HideOpts) error {
+	outputPath := resolveOutput(opts)
+	wirePayload := buildWirePayload(opts)
+
+	src, err := os.Open(opts.CarrierPath)
+	if err != nil {
+		return fmt.Errorf("opening carrier: %w", err)
+	}
+	defer src.Close()
+
+	dst, err := os.Create(outputPath)
+	if err != nil {
+		return fmt.Errorf("creating output: %w", err)
+	}
+	defer dst.Close()
+
+	if err := native.JPEGExifInject(src, dst, wirePayload, opts.Password); err != nil {
+		os.Remove(outputPath)
+		return fmt.Errorf("native JPEG EXIF injection: %w", err)
+	}
+
+	return replaceIfNeeded(opts, outputPath)
+}
+
+func revealJPEGExifNative(carrierPath string, password string) (*RevealResult, error) {
+	f, err := os.Open(carrierPath)
+	if err != nil {
+		return nil, fmt.Errorf("opening carrier: %w", err)
+	}
+	defer f.Close()
+
+	wirePayload, err := native.JPEGExifExtract(f, password)
 	if err != nil {
 		return nil, err
 	}
