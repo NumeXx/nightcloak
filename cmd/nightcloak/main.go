@@ -12,7 +12,7 @@ import (
 	"nightcloak/pkg/nightmare"
 )
 
-const version = "0.1.0"
+const version = "0.2.0"
 
 const banner = `
     ╔╗╔╦═╗╔═╗╦ ╦╔╦╗╔═╗╦  ╔═╗╔═╗╦╔═
@@ -93,6 +93,7 @@ func cmdHide(args []string) {
 		Payload:     encrypted,
 		PayloadName: payloadName,
 		Type:        payloadType,
+		Password:    password,
 	}
 	if keepOriginal && output == "" {
 		// Generate a default output path to avoid overwriting.
@@ -134,7 +135,7 @@ func cmdReveal(args []string) {
 	}
 
 	// Step 1: Extract via cloak.
-	result, err := cloak.Reveal(carrierPath)
+	result, err := cloak.Reveal(carrierPath, password)
 	if err != nil {
 		die("extraction failed: %v", err)
 	}
@@ -204,7 +205,7 @@ func cmdDump(args []string) {
 	}
 
 	// Step 1: Extract.
-	result, err := cloak.Reveal(carrierPath)
+	result, err := cloak.Reveal(carrierPath, password)
 	if err != nil {
 		die("extraction failed: %v", err)
 	}

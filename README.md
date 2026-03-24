@@ -17,16 +17,21 @@ This project is a port and modernization of the original [cloak.sh](https://gith
   payload                                     carrier file
      |                                             |
      v                                             v
-  hex encode ──> base64 ──> ROT13/5         exiftool -json ──> parse Description tag
+  hex encode ──> base64 ──> ROT13/5         parse metadata ──> extract payload
      |          (nightmare layer)                  |
      v                                             v
   PBKDF2(password, salt) ──> ChaCha20-Poly1305    ChaCha20-Poly1305 ──> verify tag ──> decrypt
      |                       (crypto layer)        |
      v                                             v
-  exiftool -@ - (stdin stream)              ROT13/5 ──> base64 decode ──> hex decode
+  inject into carrier metadata              ROT13/5 ──> base64 decode ──> hex decode
      |          (cloak layer)                      |
      v                                             v
   carrier file with embedded payload          original payload
+
+  Cloak layer routing:
+    .png ──> native Go chunk injection (zero dependencies)
+    .mp3/.avi/.ogg ──> ffmpeg FFMETADATA1
+    everything else ──> exiftool -@ - (stdin stream)
 ```
 
 Folders are compressed to zip archives in memory before entering the pipeline. The entire chain runs without writing intermediate plaintext to disk.
@@ -71,6 +76,14 @@ All obfuscation and cryptographic operations run natively in Go:
 | `zip` / `7z` | `archive/zip` |
 
 The `openssl` process is no longer visible in `ps aux` output during encryption. The password is never passed as an argument to a child process (the original passes it to `openssl` via `-pass`). If the password is provided via `-p`, it is visible in the `nightcloak` process arguments itself -- omit `-p` to be prompted interactively instead.
+
+### Native Zero-Dependency Engine (PNG)
+
+For PNG files, NightCloak bypasses `exiftool` entirely and performs surgical chunk injection using pure Go (`encoding/binary`, `hash/crc32`). The injector streams the PNG chunk-by-chunk, inserts a tEXt chunk containing the encrypted payload before IEND, and writes the result without loading the full carrier into memory.
+
+**Password-derived sentinel:** Payloads are not identified by a static string like `"Modified by Cloak"`. Instead, a 16-byte sentinel is derived from the user's password using HMAC-SHA256. The extractor recomputes the sentinel and scans tEXt chunks for a match. Without the correct password, there is no fixed signature for EDR, AV, or forensic tools to scan for -- the payload is indistinguishable from arbitrary metadata.
+
+This path produces zero child processes. No `exiftool` or `ffmpeg` appears in the process tree. The carrier file is the only disk I/O.
 
 ### Stream-Centric Architecture
 
@@ -165,7 +178,7 @@ The `obfuscate` and `deobfuscate` commands work standalone with zero dependencie
 | Dependency | Required for | macOS | Linux | Windows |
 |---|---|---|---|---|
 | Go 1.25+ | Building from source | [golang.org](https://go.dev/dl/) | [golang.org](https://go.dev/dl/) | [golang.org](https://go.dev/dl/) |
-| `exiftool` | Metadata (JPG, PNG, PDF, etc.) | `brew install exiftool` | `apt install libimage-exiftool-perl` | [exiftool.org](https://exiftool.org) |
+| `exiftool` | Metadata (JPG, PDF, etc.) -- not needed for PNG | `brew install exiftool` | `apt install libimage-exiftool-perl` | [exiftool.org](https://exiftool.org) |
 | `ffmpeg` / `ffprobe` | Metadata (MP3, AVI, OGG) | `brew install ffmpeg` | `apt install ffmpeg` | [ffmpeg.org](https://ffmpeg.org/download.html) |
 
 ## Tests
@@ -174,11 +187,12 @@ The `obfuscate` and `deobfuscate` commands work standalone with zero dependencie
 go test ./... -v
 ```
 
-38 tests across three packages:
+48 tests across four packages:
 
 - `pkg/nightmare` -- ROT13/5 self-inverse property, known character mappings, encode/decode roundtrips, output format validation.
 - `pkg/crypto` -- Encrypt/decrypt roundtrips (unicode, binary, 100KB payloads), wrong password rejection, ciphertext uniqueness, tamper detection, wire format verification.
 - `pkg/cloak` -- Description tag parsing (file, string, malformed, PDF workaround), validation, zip compression (with subdirectories), integration tests with real exiftool (auto-skipped if not installed).
+- `pkg/cloak/native` -- PNG inject/extract roundtrips, wrong password rejection, 100KB payload, binary payload, image data preservation, multi-chunk extraction, sentinel determinism. All self-contained -- no external tools required.
 
 ## Compatibility
 
@@ -187,7 +201,7 @@ NightCloak is **not** a drop-in replacement for the original Bash tools. Files h
 1. The Bash `<<<` here-string operator appends a newline to input, so `nightmare` hex-encodes `"hello\n"` while NightCloak hex-encodes `"hello"`. The obfuscated outputs differ.
 2. The encryption uses a different cipher (AEAD vs raw stream) with a different wire format.
 
-The metadata tag structure (`N:;F:` and `S:` prefixes, `"Modified by Cloak"` sentinel) is identical.
+The metadata tag structure (`N:;F:` and `S:` prefixes) is identical. The native PNG path uses a password-derived sentinel instead of the static `"Modified by Cloak"` string, so PNG files produced by NightCloak are not interchangeable with the exiftool-based path.
 
 ## Project Structure
 
@@ -196,25 +210,26 @@ cmd/nightcloak/main.go          CLI entry point (6 commands, zero-dependency fla
 pkg/nightmare/base82.go         ROT13+ROT5 substitution cipher, Base82Encode/Decode
 pkg/nightmare/nightmare.go      Nightmarify/Dreamify for strings and byte slices
 pkg/crypto/crypto.go            ChaCha20-Poly1305 AEAD with PBKDF2 key derivation
-pkg/cloak/cloak.go              Hide/Reveal/Inspect/ZipFolder, exiftool and ffmpeg paths
+pkg/cloak/cloak.go              Hide/Reveal/Inspect/ZipFolder, format routing
+pkg/cloak/native/png.go         Native PNG tEXt chunk injection/extraction (zero deps)
 ```
 
 ## Roadmap
 
 ### Native Metadata Injection (Zero-Dependency Mode)
 
-NightCloak currently shells out to `exiftool` and `ffmpeg` for metadata operations. The next phase is to replace these external orchestrators with native Go parsers that manipulate file metadata directly in the byte stream.
+NightCloak is progressively replacing external tool dependencies with native Go binary manipulation. The goal is a single static binary that requires no external tools for common image formats.
 
-**Target formats:**
+**Status:**
 
-- **JPEG** -- Surgical injection into COM (comment) and APP1 (EXIF) segments. These segments sit between SOI and SOS markers and can be inserted or replaced without re-encoding image data.
-- **PNG** -- Write payloads into tEXt or zTXt ancillary chunks. PNG readers are required to ignore unrecognized ancillary chunks, making this a clean injection point.
+- **PNG** -- Done (v0.2.0). Surgical tEXt chunk injection with password-derived sentinel. Zero external dependencies.
+- **JPEG** -- Planned. Targeting COM (comment) segments first, then APP1 (EXIF) for stealth parity with camera-produced metadata.
 
 **Goals:**
 
-- Zero child-process footprint. No `exiftool` or `ffmpeg` in the process tree. The binary operates entirely in-process with no fork/exec calls for supported formats.
-- In-memory binary parsing. Metadata segments are read and written directly on the byte stream using Go's `io.Reader`/`io.Writer` interfaces. No temporary files, no disk I/O beyond the carrier file itself.
-- Fully static, fully portable. The resulting binary runs on any Linux, macOS, or Windows system without runtime dependencies for supported formats. External tools remain available as a fallback for formats not yet handled natively (MP3, AVI, PDF).
+- Zero child-process footprint for supported formats. No `exiftool` or `ffmpeg` in the process tree.
+- In-memory binary parsing via `io.Reader`/`io.Writer` interfaces. No temporary files.
+- Fully static, fully portable. External tools remain as a fallback for formats not yet handled natively (JPG, MP3, AVI, PDF).
 
 ## Disclaimer
 

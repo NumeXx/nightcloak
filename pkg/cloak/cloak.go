@@ -22,6 +22,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"nightcloak/pkg/cloak/native"
 )
 
 const (
@@ -61,6 +63,10 @@ type HideOpts struct {
 	// Type selects the tag format: PayloadString ("S:") or PayloadFile ("N:;F:").
 	Type PayloadType
 
+	// Password is used by native injectors to derive a sentinel for
+	// payload identification. Ignored by the exiftool/ffmpeg paths.
+	Password string
+
 	// Timeout overrides the default execution timeout. Zero means default.
 	Timeout time.Duration
 }
@@ -84,27 +90,96 @@ var ffmpegExtensions = map[string]bool{
 
 // Hide embeds a payload into the carrier file's metadata tags.
 //
-// For .mp3/.avi/.ogg files, it uses ffmpeg with FFMETADATA1.
-// For all other files (JPG, PNG, PDF, etc.), it uses exiftool with
-// the streaming -@ - pattern to bypass ARG_MAX.
+// Routing: .png files use the native Go injector (zero external deps).
+// .mp3/.avi/.ogg files use ffmpeg with FFMETADATA1.
+// All other files use exiftool with the streaming -@ - pattern.
 func Hide(opts HideOpts) error {
 	if err := validateHideOpts(opts); err != nil {
 		return err
 	}
 
 	ext := strings.ToLower(filepath.Ext(opts.CarrierPath))
-	if ffmpegExtensions[ext] {
+	switch {
+	case ext == ".png":
+		return hidePNGNative(opts)
+	case ffmpegExtensions[ext]:
 		return hideFF(opts)
+	default:
+		return hideEX(opts)
 	}
-	return hideEX(opts)
 }
 
 // Reveal extracts the payload from a carrier file's metadata.
 //
-// Extraction always uses exiftool regardless of file format,
-// matching the original cloak.sh behavior.
-func Reveal(carrierPath string) (*RevealResult, error) {
+// Routing: .png files use the native Go extractor.
+// All other files use exiftool (matching original cloak.sh behavior).
+func Reveal(carrierPath string, password string) (*RevealResult, error) {
+	ext := strings.ToLower(filepath.Ext(carrierPath))
+	if ext == ".png" {
+		return revealPNGNative(carrierPath, password)
+	}
 	return revealEX(carrierPath)
+}
+
+// ---------------------------------------------------------------------------
+// native PNG path: zero external dependencies
+// ---------------------------------------------------------------------------
+
+func hidePNGNative(opts HideOpts) error {
+	outputPath := resolveOutput(opts)
+
+	// Build the wire-format payload (same N:/S: protocol as exiftool path).
+	wirePayload := buildWirePayload(opts)
+
+	src, err := os.Open(opts.CarrierPath)
+	if err != nil {
+		return fmt.Errorf("opening carrier: %w", err)
+	}
+	defer src.Close()
+
+	dst, err := os.Create(outputPath)
+	if err != nil {
+		return fmt.Errorf("creating output: %w", err)
+	}
+	defer dst.Close()
+
+	if err := native.PNGInject(src, dst, wirePayload, opts.Password); err != nil {
+		os.Remove(outputPath)
+		return fmt.Errorf("native PNG injection: %w", err)
+	}
+
+	return replaceIfNeeded(opts, outputPath)
+}
+
+func revealPNGNative(carrierPath string, password string) (*RevealResult, error) {
+	f, err := os.Open(carrierPath)
+	if err != nil {
+		return nil, fmt.Errorf("opening carrier: %w", err)
+	}
+	defer f.Close()
+
+	wirePayload, err := native.PNGExtract(f, password)
+	if err != nil {
+		return nil, err
+	}
+
+	return parseDescription(string(wirePayload))
+}
+
+// buildWirePayload encodes the payload into the cloak wire format
+// (same N:/S: protocol used by the exiftool and ffmpeg paths).
+func buildWirePayload(opts HideOpts) []byte {
+	switch opts.Type {
+	case PayloadFile:
+		name64 := base64.StdEncoding.EncodeToString([]byte(opts.PayloadName))
+		payload64 := base64.StdEncoding.EncodeToString(opts.Payload)
+		return []byte(fmt.Sprintf("N:%s;F:%s", name64, payload64))
+	case PayloadString:
+		payload64 := base64.StdEncoding.EncodeToString(opts.Payload)
+		return []byte(fmt.Sprintf("S:%s", payload64))
+	default:
+		return nil
+	}
 }
 
 // ---------------------------------------------------------------------------

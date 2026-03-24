@@ -72,7 +72,7 @@ func TestIntegration_HideReveal_StringPayload(t *testing.T) {
 	}
 
 	// Reveal
-	result, err := Reveal(output)
+	result, err := Reveal(output, "")
 	if err != nil {
 		t.Fatalf("Reveal error: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestIntegration_HideReveal_FilePayload(t *testing.T) {
 	}
 
 	// Reveal
-	result, err := Reveal(output)
+	result, err := Reveal(output, "")
 	if err != nil {
 		t.Fatalf("Reveal error: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestIntegration_HideReveal_InPlace(t *testing.T) {
 	}
 
 	// Reveal from the original path.
-	result, err := Reveal(carrier)
+	result, err := Reveal(carrier, "")
 	if err != nil {
 		t.Fatalf("Reveal error: %v", err)
 	}
@@ -183,7 +183,7 @@ func TestIntegration_HideReveal_LargePayload(t *testing.T) {
 		t.Fatalf("Hide error: %v", err)
 	}
 
-	result, err := Reveal(output)
+	result, err := Reveal(output, "")
 	if err != nil {
 		t.Fatalf("Reveal error: %v", err)
 	}
@@ -205,7 +205,7 @@ func TestIntegration_Reveal_NoPayload(t *testing.T) {
 	carrier := createTestJPEG(t, dir)
 
 	// Reveal from a file with no cloak data.
-	_, err := Reveal(carrier)
+	_, err := Reveal(carrier, "")
 	if err == nil {
 		t.Fatal("expected error for file without cloak data")
 	}
