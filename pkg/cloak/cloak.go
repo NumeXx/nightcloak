@@ -90,7 +90,7 @@ var ffmpegExtensions = map[string]bool{
 
 // Hide embeds a payload into the carrier file's metadata tags.
 //
-// Routing: .png files use the native Go injector (zero external deps).
+// Routing: .png and .jpg/.jpeg use native Go injectors (zero external deps).
 // .mp3/.avi/.ogg files use ffmpeg with FFMETADATA1.
 // All other files use exiftool with the streaming -@ - pattern.
 func Hide(opts HideOpts) error {
@@ -102,6 +102,8 @@ func Hide(opts HideOpts) error {
 	switch {
 	case ext == ".png":
 		return hidePNGNative(opts)
+	case ext == ".jpg" || ext == ".jpeg":
+		return hideJPEGNative(opts)
 	case ffmpegExtensions[ext]:
 		return hideFF(opts)
 	default:
@@ -111,14 +113,18 @@ func Hide(opts HideOpts) error {
 
 // Reveal extracts the payload from a carrier file's metadata.
 //
-// Routing: .png files use the native Go extractor.
+// Routing: .png and .jpg/.jpeg use native Go extractors.
 // All other files use exiftool (matching original cloak.sh behavior).
 func Reveal(carrierPath string, password string) (*RevealResult, error) {
 	ext := strings.ToLower(filepath.Ext(carrierPath))
-	if ext == ".png" {
+	switch {
+	case ext == ".png":
 		return revealPNGNative(carrierPath, password)
+	case ext == ".jpg" || ext == ".jpeg":
+		return revealJPEGNative(carrierPath, password)
+	default:
+		return revealEX(carrierPath)
 	}
-	return revealEX(carrierPath)
 }
 
 // ---------------------------------------------------------------------------
@@ -159,6 +165,49 @@ func revealPNGNative(carrierPath string, password string) (*RevealResult, error)
 	defer f.Close()
 
 	wirePayload, err := native.PNGExtract(f, password)
+	if err != nil {
+		return nil, err
+	}
+
+	return parseDescription(string(wirePayload))
+}
+
+// ---------------------------------------------------------------------------
+// native JPEG path: zero external dependencies
+// ---------------------------------------------------------------------------
+
+func hideJPEGNative(opts HideOpts) error {
+	outputPath := resolveOutput(opts)
+	wirePayload := buildWirePayload(opts)
+
+	src, err := os.Open(opts.CarrierPath)
+	if err != nil {
+		return fmt.Errorf("opening carrier: %w", err)
+	}
+	defer src.Close()
+
+	dst, err := os.Create(outputPath)
+	if err != nil {
+		return fmt.Errorf("creating output: %w", err)
+	}
+	defer dst.Close()
+
+	if err := native.JPEGInject(src, dst, wirePayload, opts.Password); err != nil {
+		os.Remove(outputPath)
+		return fmt.Errorf("native JPEG injection: %w", err)
+	}
+
+	return replaceIfNeeded(opts, outputPath)
+}
+
+func revealJPEGNative(carrierPath string, password string) (*RevealResult, error) {
+	f, err := os.Open(carrierPath)
+	if err != nil {
+		return nil, fmt.Errorf("opening carrier: %w", err)
+	}
+	defer f.Close()
+
+	wirePayload, err := native.JPEGExtract(f, password)
 	if err != nil {
 		return nil, err
 	}

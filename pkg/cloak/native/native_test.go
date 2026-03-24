@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"image"
 	"image/color"
+	"image/jpeg"
 	"image/png"
 	"strings"
 	"testing"
@@ -230,5 +231,160 @@ func TestPNG_MultipleTextChunks(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no nightcloak payload found") {
 		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// JPEG tests
+// ---------------------------------------------------------------------------
+
+func createTestJPEG(t *testing.T) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 4, 4))
+	for y := 0; y < 4; y++ {
+		for x := 0; x < 4; x++ {
+			img.Set(x, y, color.RGBA{R: uint8(x * 60), G: uint8(y * 60), B: 128, A: 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 90}); err != nil {
+		t.Fatalf("creating test JPEG: %v", err)
+	}
+	return buf.Bytes()
+}
+
+func TestJPEG_InjectExtract_RoundTrip(t *testing.T) {
+	carrier := createTestJPEG(t)
+	payload := []byte("secret JPEG payload injected natively")
+	password := "jpegpass"
+
+	var injected bytes.Buffer
+	err := JPEGInject(bytes.NewReader(carrier), &injected, payload, password)
+	if err != nil {
+		t.Fatalf("JPEGInject error: %v", err)
+	}
+
+	// Verify the result is still a valid JPEG.
+	_, err = jpeg.Decode(bytes.NewReader(injected.Bytes()))
+	if err != nil {
+		t.Fatalf("injected JPEG is not valid: %v", err)
+	}
+
+	extracted, err := JPEGExtract(bytes.NewReader(injected.Bytes()), password)
+	if err != nil {
+		t.Fatalf("JPEGExtract error: %v", err)
+	}
+	if !bytes.Equal(extracted, payload) {
+		t.Errorf("payload mismatch: got %q, want %q", extracted, payload)
+	}
+}
+
+func TestJPEG_WrongPassword(t *testing.T) {
+	carrier := createTestJPEG(t)
+
+	var injected bytes.Buffer
+	JPEGInject(bytes.NewReader(carrier), &injected, []byte("secret"), "correct")
+
+	_, err := JPEGExtract(bytes.NewReader(injected.Bytes()), "wrong")
+	if err == nil {
+		t.Fatal("expected error for wrong password")
+	}
+}
+
+func TestJPEG_NoPayload(t *testing.T) {
+	carrier := createTestJPEG(t)
+
+	_, err := JPEGExtract(bytes.NewReader(carrier), "anypass")
+	if err == nil {
+		t.Fatal("expected error for clean JPEG")
+	}
+}
+
+func TestJPEG_LargePayload(t *testing.T) {
+	carrier := createTestJPEG(t)
+
+	// 200KB payload — requires multiple COM segments (each max 65533).
+	payload := make([]byte, 200_000)
+	for i := range payload {
+		payload[i] = byte(i % 256)
+	}
+
+	var injected bytes.Buffer
+	err := JPEGInject(bytes.NewReader(carrier), &injected, payload, "bigpass")
+	if err != nil {
+		t.Fatalf("JPEGInject error: %v", err)
+	}
+
+	// Still valid.
+	_, err = jpeg.Decode(bytes.NewReader(injected.Bytes()))
+	if err != nil {
+		t.Fatalf("injected JPEG is not valid: %v", err)
+	}
+
+	extracted, err := JPEGExtract(bytes.NewReader(injected.Bytes()), "bigpass")
+	if err != nil {
+		t.Fatalf("JPEGExtract error: %v", err)
+	}
+	if !bytes.Equal(extracted, payload) {
+		t.Errorf("large payload mismatch: got %d bytes, want %d", len(extracted), len(payload))
+	}
+}
+
+func TestJPEG_BinaryPayload(t *testing.T) {
+	carrier := createTestJPEG(t)
+	payload := make([]byte, 256)
+	for i := range payload {
+		payload[i] = byte(i)
+	}
+
+	var injected bytes.Buffer
+	JPEGInject(bytes.NewReader(carrier), &injected, payload, "binpass")
+
+	extracted, err := JPEGExtract(bytes.NewReader(injected.Bytes()), "binpass")
+	if err != nil {
+		t.Fatalf("JPEGExtract error: %v", err)
+	}
+	if !bytes.Equal(extracted, payload) {
+		t.Error("binary payload roundtrip failed")
+	}
+}
+
+func TestJPEG_InvalidFile(t *testing.T) {
+	notJPEG := []byte("this is not a JPEG")
+
+	var out bytes.Buffer
+	err := JPEGInject(bytes.NewReader(notJPEG), &out, []byte("x"), "pass")
+	if err == nil {
+		t.Fatal("expected error for non-JPEG input")
+	}
+
+	_, err = JPEGExtract(bytes.NewReader(notJPEG), "pass")
+	if err == nil {
+		t.Fatal("expected error for non-JPEG input")
+	}
+}
+
+func TestJPEG_ImageDataPreserved(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 4, 4))
+	for y := 0; y < 4; y++ {
+		for x := 0; x < 4; x++ {
+			img.Set(x, y, color.RGBA{R: uint8(x * 60), G: uint8(y * 60), B: 128, A: 255})
+		}
+	}
+	var carrier bytes.Buffer
+	jpeg.Encode(&carrier, img, &jpeg.Options{Quality: 100})
+
+	var injected bytes.Buffer
+	JPEGInject(bytes.NewReader(carrier.Bytes()), &injected, []byte("payload"), "pass")
+
+	// Decode both and compare dimensions (JPEG is lossy so pixel
+	// comparison is not reliable, but dimensions must match).
+	orig, _ := jpeg.Decode(bytes.NewReader(carrier.Bytes()))
+	decoded, err := jpeg.Decode(bytes.NewReader(injected.Bytes()))
+	if err != nil {
+		t.Fatalf("decoding injected JPEG: %v", err)
+	}
+	if orig.Bounds() != decoded.Bounds() {
+		t.Errorf("image dimensions changed: %v vs %v", orig.Bounds(), decoded.Bounds())
 	}
 }
