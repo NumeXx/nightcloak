@@ -12,7 +12,7 @@ import (
 	"nightcloak/pkg/nightmare"
 )
 
-const version = "0.5.1"
+const version = "0.5.2"
 
 const banner = `
     ╔╗╔╦═╗╔═╗╦ ╦╔╦╗╔═╗╦  ╔═╗╔═╗╦╔═
@@ -348,10 +348,7 @@ func printTHC() {
 
   This tool carries the spirit of THC's work: small, sharp, and silent.
   The steganography philosophy and the "nightmare" obfuscation chain
-  were directly inspired by the techniques pioneered by Skyper and the
-  THC community over decades of open security research.
-
-  "We're a group of bored HACKERS who like to improve things."`)
+  were directly inspired by the techniques pioneered by Doctor Who (Jiab77) & Skyper.`)
 }
 
 // ---------------------------------------------------------------------------
