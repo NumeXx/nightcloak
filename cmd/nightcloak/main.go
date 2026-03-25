@@ -12,7 +12,7 @@ import (
 	"nightcloak/pkg/nightmare"
 )
 
-const version = "0.5.0"
+const version = "0.5.1"
 
 const banner = `
     ╔╗╔╦═╗╔═╗╦ ╦╔╦╗╔═╗╦  ╔═╗╔═╗╦╔═
@@ -44,6 +44,8 @@ func main() {
 		printHelp()
 	case "-v", "--version", "version":
 		fmt.Printf("nightcloak %s\n", version)
+	case "--thc":
+		printTHC()
 	default:
 		die("unknown command: %s", os.Args[1])
 	}
@@ -70,9 +72,7 @@ func cmdHide(args []string) {
 	carrierPath := args[0]
 	payloadArg := args[1]
 
-	if password == "" {
-		password = promptPassword("Enter password: ")
-	}
+	password = resolvePassword(password)
 
 	// Determine payload source: file, stdin, or inline string.
 	payload, payloadName, payloadType := resolvePayload(payloadArg)
@@ -130,9 +130,7 @@ func cmdReveal(args []string) {
 
 	carrierPath := args[0]
 
-	if password == "" {
-		password = promptPassword("Enter password: ")
-	}
+	password = resolvePassword(password)
 
 	// Step 1: Extract via cloak.
 	result, err := cloak.Reveal(carrierPath, password)
@@ -200,9 +198,7 @@ func cmdDump(args []string) {
 
 	carrierPath := args[0]
 
-	if password == "" {
-		password = promptPassword("Enter password: ")
-	}
+	password = resolvePassword(password)
 
 	// Step 1: Extract.
 	result, err := cloak.Reveal(carrierPath, password)
@@ -323,17 +319,39 @@ func parseFlags(args []string, strFlags map[string]*string, boolFlags map[string
 }
 
 // ---------------------------------------------------------------------------
-// password prompt
+// password resolution
 // ---------------------------------------------------------------------------
 
-func promptPassword(prompt string) string {
-	fmt.Fprint(os.Stderr, prompt)
+// resolvePassword returns the password from, in priority order:
+//  1. The explicit flag value (-p / --password)
+//  2. The NIGHT_PASSWORD environment variable
+//  3. An interactive terminal prompt
+func resolvePassword(explicit string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if env := os.Getenv("NIGHT_PASSWORD"); env != "" {
+		return env
+	}
+	fmt.Fprint(os.Stderr, "Enter password: ")
 	var pw string
 	fmt.Scanln(&pw)
 	if pw == "" {
 		die("password cannot be empty")
 	}
 	return pw
+}
+
+func printTHC() {
+	fmt.Fprintln(os.Stderr, `
+  The Hacker's Choice -- https://www.thc.org
+
+  This tool carries the spirit of THC's work: small, sharp, and silent.
+  The steganography philosophy and the "nightmare" obfuscation chain
+  were directly inspired by the techniques pioneered by Skyper and the
+  THC community over decades of open security research.
+
+  "We're a group of bored HACKERS who like to improve things."`)
 }
 
 // ---------------------------------------------------------------------------

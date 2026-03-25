@@ -3,6 +3,7 @@ package native
 import (
 	"bytes"
 	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/binary"
 	"image"
 	"image/color"
@@ -784,6 +785,134 @@ func TestMP3_AudioDataIntact(t *testing.T) {
 	if !bytes.Equal(recoveredAudio, audio) {
 		t.Error("audio data was modified during injection")
 	}
+}
+
+// TestMP3_AudioStreamIntegrity proves that surgical padding injection is
+// bit-perfect: the audio stream bytes are byte-for-byte identical before
+// and after injection. This contrasts with ffmpeg which re-muxes the file,
+// potentially touching audio data or rewriting existing tag fields.
+func TestMP3_AudioStreamIntegrity(t *testing.T) {
+	// Build an MP3 with two metadata frames (TIT2, TPE1) and 4KB padding,
+	// followed by the audio data. The padding is large enough to absorb
+	// our TXXX frame without requiring the tag to be expanded.
+
+	// TIT2 frame: "Zero-Touch Verification"
+	title := []byte("Zero-Touch Verification")
+	tit2Data := make([]byte, 1+len(title))
+	tit2Data[0] = 0x00 // ISO-8859-1
+	copy(tit2Data[1:], title)
+	tit2Frame := make([]byte, frameHeaderV23+len(tit2Data))
+	copy(tit2Frame[0:4], "TIT2")
+	binary.BigEndian.PutUint32(tit2Frame[4:8], uint32(len(tit2Data)))
+	copy(tit2Frame[frameHeaderV23:], tit2Data)
+
+	// TPE1 frame: "NightCloak"
+	artist := []byte("NightCloak")
+	tpe1Data := make([]byte, 1+len(artist))
+	tpe1Data[0] = 0x00
+	copy(tpe1Data[1:], artist)
+	tpe1Frame := make([]byte, frameHeaderV23+len(tpe1Data))
+	copy(tpe1Frame[0:4], "TPE1")
+	binary.BigEndian.PutUint32(tpe1Frame[4:8], uint32(len(tpe1Data)))
+	copy(tpe1Frame[frameHeaderV23:], tpe1Data)
+
+	// 4KB padding — large enough that our TXXX frame fits without expansion.
+	padding := make([]byte, 4096)
+
+	tagBody := append(append(tit2Frame, tpe1Frame...), padding...)
+	ss := encodeSyncsafe(uint32(len(tagBody)))
+	id3Header := []byte{'I', 'D', '3', 0x03, 0x00, 0x00, ss[0], ss[1], ss[2], ss[3]}
+
+	// 3 silent MPEG frames as audio data.
+	audioFrame := make([]byte, 418)
+	audioFrame[0] = 0xFF
+	audioFrame[1] = 0xFB
+	audioFrame[2] = 0x90
+	audioFrame[3] = 0x04
+	audioData := append(append(audioFrame, audioFrame...), audioFrame...)
+
+	var carrier bytes.Buffer
+	carrier.Write(id3Header)
+	carrier.Write(tagBody)
+	carrier.Write(audioData)
+	original := carrier.Bytes()
+
+	// Record the audio stream hash BEFORE injection.
+	origTagSize := decodeSyncsafe(original[6:10])
+	origAudioStart := id3HeaderSize + int(origTagSize)
+	origAudioBytes := original[origAudioStart:]
+	hashBefore := sha256.Sum256(origAudioBytes)
+
+	// Inject a payload. Should fit in padding without shifting audio.
+	payload := []byte("integrity-check-payload")
+	var injected bytes.Buffer
+	if err := MP3Inject(bytes.NewReader(original), &injected, payload, "integritypass"); err != nil {
+		t.Fatalf("MP3Inject error: %v", err)
+	}
+	result := injected.Bytes()
+
+	// Verify tag size did not change (padding was sufficient).
+	newTagSize := decodeSyncsafe(result[6:10])
+	if newTagSize != origTagSize {
+		t.Errorf("tag expanded from %d to %d bytes — padding was insufficient for the test", origTagSize, newTagSize)
+	}
+
+	// Extract audio bytes from injected file.
+	newAudioStart := id3HeaderSize + int(newTagSize)
+	newAudioBytes := result[newAudioStart:]
+
+	// SHA256 of audio stream must be identical.
+	hashAfter := sha256.Sum256(newAudioBytes)
+	if hashBefore != hashAfter {
+		t.Errorf("audio stream SHA256 changed after injection\n  before: %x\n  after:  %x", hashBefore, hashAfter)
+	}
+
+	// Verify original metadata frames survive.
+	tagBody2 := result[id3HeaderSize : id3HeaderSize+int(newTagSize)]
+	pos := uint32(0)
+	foundTIT2, foundTPE1 := false, false
+	for pos+frameHeaderV23 <= uint32(len(tagBody2)) {
+		if tagBody2[pos] == 0x00 {
+			break
+		}
+		frameID := string(tagBody2[pos : pos+4])
+		frameSize := binary.BigEndian.Uint32(tagBody2[pos+4 : pos+8])
+		switch frameID {
+		case "TIT2":
+			foundTIT2 = true
+			// Verify content is unchanged.
+			frameContent := tagBody2[pos+frameHeaderV23+1 : pos+frameHeaderV23+frameSize]
+			if string(frameContent) != string(title) {
+				t.Errorf("TIT2 content changed: got %q, want %q", frameContent, title)
+			}
+		case "TPE1":
+			foundTPE1 = true
+			frameContent := tagBody2[pos+frameHeaderV23+1 : pos+frameHeaderV23+frameSize]
+			if string(frameContent) != string(artist) {
+				t.Errorf("TPE1 content changed: got %q, want %q", frameContent, artist)
+			}
+		}
+		pos += uint32(frameHeaderV23) + frameSize
+	}
+	if !foundTIT2 {
+		t.Error("TIT2 frame missing after injection")
+	}
+	if !foundTPE1 {
+		t.Error("TPE1 frame missing after injection")
+	}
+
+	// Confirm payload is recoverable.
+	extracted, err := MP3Extract(bytes.NewReader(result), "integritypass")
+	if err != nil {
+		t.Fatalf("MP3Extract error: %v", err)
+	}
+	if !bytes.Equal(extracted, payload) {
+		t.Errorf("payload mismatch: got %q, want %q", extracted, payload)
+	}
+
+	t.Logf("Audio stream SHA256 (before): %x", hashBefore)
+	t.Logf("Audio stream SHA256 (after):  %x", hashAfter)
+	t.Logf("Hashes match: %v", hashBefore == hashAfter)
 }
 
 func TestSyncsafe_RoundTrip(t *testing.T) {

@@ -86,7 +86,7 @@ For PNG and JPEG files, NightCloak bypasses `exiftool` entirely and performs sur
 - **PNG:** Injects a tEXt chunk before the IEND marker. The injector streams the file chunk-by-chunk without loading the full carrier into memory.
 - **JPEG (Stealth/Default):** Constructs a parallel APP1 segment containing a valid TIFF/EXIF structure with the payload stored in the UserComment (0x9286) tag. The TIFF uses Big Endian (MM) byte order with a minimal IFD chain: IFD0 -> ExifIFDPointer -> EXIF sub-IFD -> UserComment. The UserComment uses the undefined charset prefix (`\0` x 8), making the binary payload indistinguishable from camera-vendor encoded comments (Sony, Canon, Nikon all write binary UserComment data). For payloads exceeding ~65KB, multiple APP1 segments are chained. Existing camera EXIF data is left untouched.
 - **JPEG (COM):** The COM (0xFFFE) segment injector remains available in `pkg/cloak/native/jpeg.go` for direct use. COM segments are simpler but more conspicuous to forensic analysis.
-- **MP3:** Injects a TXXX (user-defined text) frame into the ID3v2 tag with the description `ENCODEDBY`. Handles both ID3v2.3 (standard sizes) and ID3v2.4 (syncsafe sizes). If the existing tag has sufficient padding, the frame is written in-place without shifting audio data. If no ID3v2 tag exists, one is created from scratch. Existing metadata frames (title, artist, album) are preserved.
+- **MP3:** Injects a TXXX (user-defined text) frame into the ID3v2 tag with the description `ENCODEDBY`. Handles both ID3v2.3 (standard sizes) and ID3v2.4 (syncsafe sizes). If the existing tag has sufficient padding, the frame is written in-place without shifting audio data. If no ID3v2 tag exists, one is created from scratch. Existing metadata frames (title, artist, album) are preserved. The audio stream is bit-perfect after injection -- verified by SHA256 comparison in the test suite (see `TestMP3_AudioStreamIntegrity`).
 
 **Password-derived sentinel:** Payloads are not identified by a static string like `"Modified by Cloak"`. Instead, a 16-byte sentinel is derived from the user's password using HMAC-SHA256. The extractor recomputes the sentinel and scans metadata segments for a match. Without the correct password, there is no fixed signature for EDR, AV, or forensic tools to scan for -- the payload is indistinguishable from arbitrary metadata.
 
@@ -99,6 +99,22 @@ The original `cloak.sh` writes the full encrypted payload to a temporary file, t
 NightCloak streams data directly into exiftool's stdin using `-@ -` and a goroutine-driven `io.Pipe()`. The payload flows from memory into the tool's stdin without touching the filesystem. This also bypasses the kernel's `ARG_MAX` limit (~256KB on macOS, ~2MB on Linux) that would reject large payloads passed as CLI arguments.
 
 For ffmpeg (used with `.mp3`, `.avi`, `.ogg` containers), a temporary FFMETADATA1 file is still required because ffmpeg needs a seekable file for its second `-i` input. It is removed immediately after use.
+
+### Automation and Environment Variables
+
+The password can be supplied via the `NIGHT_PASSWORD` environment variable instead of the `-p` flag or interactive prompt. Resolution order:
+
+1. `-p` / `--password` flag
+2. `NIGHT_PASSWORD` environment variable
+3. Interactive terminal prompt
+
+```bash
+export NIGHT_PASSWORD="mypassword"
+nightcloak hide photo.jpg payload.bin
+nightcloak reveal photo.jpg
+```
+
+This allows scripted pipelines to set the password once without passing it on every command line.
 
 ## Usage
 
@@ -194,7 +210,7 @@ The `obfuscate` and `deobfuscate` commands work standalone with zero dependencie
 go test ./... -v
 ```
 
-73 tests across four packages:
+74 tests across four packages:
 
 - `pkg/nightmare` -- ROT13/5 self-inverse property, known character mappings, encode/decode roundtrips, output format validation.
 - `pkg/crypto` -- Encrypt/decrypt roundtrips (unicode, binary, 100KB payloads), wrong password rejection, ciphertext uniqueness, tamper detection, wire format verification.
