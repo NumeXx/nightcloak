@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
+	"fmt"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -929,5 +930,205 @@ func TestSyncsafe_RoundTrip(t *testing.T) {
 				t.Errorf("syncsafe byte %d has high bit set for value %d: %02x", i, v, b)
 			}
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// PDF tests
+// ---------------------------------------------------------------------------
+
+// buildMinimalPDF constructs a valid flat-XREF PDF with three objects:
+//   1: Catalog, 2: Pages (empty), 3: Info dict with /Title and optional /Keywords.
+//
+// Byte offsets are computed precisely so the XREF table is valid.
+func buildMinimalPDF(keywords string) []byte {
+	var body bytes.Buffer
+
+	obj1 := "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
+	obj2 := "2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n"
+
+	var obj3 string
+	if keywords != "" {
+		obj3 = fmt.Sprintf("3 0 obj\n<< /Title (Test Document) /Keywords (%s) >>\nendobj\n", keywords)
+	} else {
+		obj3 = "3 0 obj\n<< /Title (Test Document) >>\nendobj\n"
+	}
+
+	header := "%PDF-1.4\n"
+	body.WriteString(header)
+
+	off1 := body.Len()
+	body.WriteString(obj1)
+	off2 := body.Len()
+	body.WriteString(obj2)
+	off3 := body.Len()
+	body.WriteString(obj3)
+
+	xrefOffset := body.Len()
+	body.WriteString("xref\n")
+	body.WriteString("0 4\n")
+	body.WriteString("0000000000 65535 f\r\n")
+	fmt.Fprintf(&body, "%010d 00000 n\r\n", off1)
+	fmt.Fprintf(&body, "%010d 00000 n\r\n", off2)
+	fmt.Fprintf(&body, "%010d 00000 n\r\n", off3)
+	body.WriteString("trailer\n<< /Size 4 /Root 1 0 R /Info 3 0 R >>\n")
+	fmt.Fprintf(&body, "startxref\n%d\n", xrefOffset)
+	body.WriteString("%%EOF\n")
+
+	return body.Bytes()
+}
+
+// TestPDF_HideReveal tests a full hide→reveal cycle on a minimal PDF.
+func TestPDF_HideReveal(t *testing.T) {
+	pdf := buildMinimalPDF("")
+	payload := []byte("S:dGVzdC1wYXlsb2Fk") // "S:<base64(test-payload)>"
+
+	var out bytes.Buffer
+	if err := PDFInject(bytes.NewReader(pdf), &out, payload, "testpass"); err != nil {
+		t.Fatalf("PDFInject: %v", err)
+	}
+
+	recovered, err := PDFExtract(bytes.NewReader(out.Bytes()), "testpass")
+	if err != nil {
+		t.Fatalf("PDFExtract: %v", err)
+	}
+	if !bytes.Equal(recovered, payload) {
+		t.Errorf("payload mismatch\n  got:  %q\n  want: %q", recovered, payload)
+	}
+}
+
+// TestPDF_WrongPassword verifies extraction fails with the wrong password.
+func TestPDF_WrongPassword(t *testing.T) {
+	pdf := buildMinimalPDF("")
+
+	var out bytes.Buffer
+	if err := PDFInject(bytes.NewReader(pdf), &out, []byte("secret"), "correctpass"); err != nil {
+		t.Fatalf("PDFInject: %v", err)
+	}
+
+	_, err := PDFExtract(bytes.NewReader(out.Bytes()), "wrongpass")
+	if err == nil {
+		t.Error("expected error with wrong password, got nil")
+	}
+}
+
+// TestPDF_SingleEOF verifies the output contains exactly one %%EOF marker.
+// Multiple %%EOF markers are the forensic signature of incremental updates.
+func TestPDF_SingleEOF(t *testing.T) {
+	pdf := buildMinimalPDF("")
+
+	var out bytes.Buffer
+	if err := PDFInject(bytes.NewReader(pdf), &out, []byte("payload"), "pass"); err != nil {
+		t.Fatalf("PDFInject: %v", err)
+	}
+
+	result := out.Bytes()
+	count := bytes.Count(result, []byte("%%EOF"))
+	if count != 1 {
+		t.Errorf("expected exactly 1 %%%%EOF marker, got %d", count)
+	}
+}
+
+// TestPDF_NoPrevChain verifies the purge removes the /Prev key from the trailer.
+func TestPDF_NoPrevChain(t *testing.T) {
+	pdf := buildMinimalPDF("")
+
+	var out bytes.Buffer
+	if err := PDFInject(bytes.NewReader(pdf), &out, []byte("payload"), "pass"); err != nil {
+		t.Fatalf("PDFInject: %v", err)
+	}
+
+	if bytes.Contains(out.Bytes(), []byte("/Prev")) {
+		t.Error("/Prev key found in purged output — incremental update history leaked")
+	}
+}
+
+// TestPDF_ExistingKeywordsReplaced verifies that if /Keywords already exists
+// in the Info dict, it is replaced (not duplicated) after injection.
+func TestPDF_ExistingKeywordsReplaced(t *testing.T) {
+	pdf := buildMinimalPDF("original keywords")
+
+	var out bytes.Buffer
+	if err := PDFInject(bytes.NewReader(pdf), &out, []byte("new-payload"), "pass"); err != nil {
+		t.Fatalf("PDFInject: %v", err)
+	}
+
+	result := out.Bytes()
+
+	// The literal string "(original keywords)" must not appear in the output.
+	if bytes.Contains(result, []byte("original keywords")) {
+		t.Error("old /Keywords value still present after injection")
+	}
+
+	// There must be exactly one /Keywords entry.
+	count := bytes.Count(result, []byte("/Keywords"))
+	if count != 1 {
+		t.Errorf("expected 1 /Keywords entry, got %d", count)
+	}
+}
+
+// TestPDF_TitlePreserved verifies that other /Info fields survive injection.
+func TestPDF_TitlePreserved(t *testing.T) {
+	pdf := buildMinimalPDF("")
+
+	var out bytes.Buffer
+	if err := PDFInject(bytes.NewReader(pdf), &out, []byte("payload"), "pass"); err != nil {
+		t.Fatalf("PDFInject: %v", err)
+	}
+
+	if !bytes.Contains(out.Bytes(), []byte("/Title")) {
+		t.Error("/Title key missing from Info dict after injection")
+	}
+	if !bytes.Contains(out.Bytes(), []byte("(Test Document)")) {
+		t.Error("/Title value '(Test Document)' missing after injection")
+	}
+}
+
+// TestPDF_IdempotentReveal verifies that injecting twice and revealing returns
+// the second payload (not a corrupt concatenation of both).
+func TestPDF_IdempotentReveal(t *testing.T) {
+	pdf := buildMinimalPDF("")
+
+	var first bytes.Buffer
+	if err := PDFInject(bytes.NewReader(pdf), &first, []byte("first-payload"), "pass"); err != nil {
+		t.Fatalf("first PDFInject: %v", err)
+	}
+
+	var second bytes.Buffer
+	if err := PDFInject(bytes.NewReader(first.Bytes()), &second, []byte("second-payload"), "pass"); err != nil {
+		t.Fatalf("second PDFInject: %v", err)
+	}
+
+	recovered, err := PDFExtract(bytes.NewReader(second.Bytes()), "pass")
+	if err != nil {
+		t.Fatalf("PDFExtract: %v", err)
+	}
+	if !bytes.Equal(recovered, []byte("second-payload")) {
+		t.Errorf("expected second-payload, got %q", recovered)
+	}
+}
+
+// TestPDF_ValidHeader verifies the output begins with the original PDF header.
+func TestPDF_ValidHeader(t *testing.T) {
+	pdf := buildMinimalPDF("")
+
+	var out bytes.Buffer
+	if err := PDFInject(bytes.NewReader(pdf), &out, []byte("payload"), "pass"); err != nil {
+		t.Fatalf("PDFInject: %v", err)
+	}
+
+	if !bytes.HasPrefix(out.Bytes(), []byte("%PDF-1.4")) {
+		t.Error("output does not begin with original PDF header")
+	}
+}
+
+// TestPDF_NotAPDF verifies a meaningful error is returned for non-PDF input.
+func TestPDF_NotAPDF(t *testing.T) {
+	junk := []byte("this is not a PDF file at all")
+
+	var out bytes.Buffer
+	err := PDFInject(bytes.NewReader(junk), &out, []byte("payload"), "pass")
+	if err == nil {
+		t.Error("expected error for non-PDF input, got nil")
 	}
 }

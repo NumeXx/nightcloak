@@ -89,9 +89,9 @@ var ffmpegExtensions = map[string]bool{
 
 // Hide embeds a payload into the carrier file's metadata tags.
 //
-// Routing: .png, .jpg/.jpeg, and .mp3 use native Go injectors (zero external deps).
-// .avi/.ogg files use ffmpeg with FFMETADATA1.
-// All other files use exiftool with the streaming -@ - pattern.
+// Routing: .png, .jpg/.jpeg, .mp3, and .pdf use native Go injectors (zero
+// external deps). .avi/.ogg files use ffmpeg with FFMETADATA1. All other
+// files use exiftool with the streaming -@ - pattern.
 func Hide(opts HideOpts) error {
 	if err := validateHideOpts(opts); err != nil {
 		return err
@@ -105,6 +105,8 @@ func Hide(opts HideOpts) error {
 		return hideJPEGExifNative(opts)
 	case ext == ".mp3":
 		return hideMP3Native(opts)
+	case ext == ".pdf":
+		return hidePDFNative(opts)
 	case ffmpegExtensions[ext]:
 		return hideFF(opts)
 	default:
@@ -114,7 +116,7 @@ func Hide(opts HideOpts) error {
 
 // Reveal extracts the payload from a carrier file's metadata.
 //
-// Routing: .png, .jpg/.jpeg, and .mp3 use native Go extractors.
+// Routing: .png, .jpg/.jpeg, .mp3, and .pdf use native Go extractors.
 // All other files use exiftool.
 func Reveal(carrierPath string, password string) (*RevealResult, error) {
 	ext := strings.ToLower(filepath.Ext(carrierPath))
@@ -125,6 +127,8 @@ func Reveal(carrierPath string, password string) (*RevealResult, error) {
 		return revealJPEGExifNative(carrierPath, password)
 	case ext == ".mp3":
 		return revealMP3Native(carrierPath, password)
+	case ext == ".pdf":
+		return revealPDFNative(carrierPath, password)
 	default:
 		return revealEX(carrierPath)
 	}
@@ -298,6 +302,57 @@ func revealJPEGExifNative(carrierPath string, password string) (*RevealResult, e
 
 	wirePayload, err := native.JPEGExifExtract(f, password)
 	if err != nil {
+		return nil, err
+	}
+
+	return parseDescription(string(wirePayload))
+}
+
+// ---------------------------------------------------------------------------
+// native PDF path: flat XREF purge & inject
+// ---------------------------------------------------------------------------
+
+func hidePDFNative(opts HideOpts) error {
+	outputPath := resolveOutput(opts)
+	wirePayload := buildWirePayload(opts)
+
+	src, err := os.Open(opts.CarrierPath)
+	if err != nil {
+		return fmt.Errorf("opening carrier: %w", err)
+	}
+	defer src.Close()
+
+	dst, err := os.Create(outputPath)
+	if err != nil {
+		return fmt.Errorf("creating output: %w", err)
+	}
+	defer dst.Close()
+
+	if err := native.PDFInject(src, dst, wirePayload, opts.Password); err != nil {
+		os.Remove(outputPath)
+		// Fall back to exiftool for XREF streams and encrypted PDFs.
+		if errors.Is(err, native.ErrXREFStream) || errors.Is(err, native.ErrEncryptedPDF) {
+			return hideEX(opts)
+		}
+		return fmt.Errorf("native PDF injection: %w", err)
+	}
+
+	return replaceIfNeeded(opts, outputPath)
+}
+
+func revealPDFNative(carrierPath string, password string) (*RevealResult, error) {
+	f, err := os.Open(carrierPath)
+	if err != nil {
+		return nil, fmt.Errorf("opening carrier: %w", err)
+	}
+	defer f.Close()
+
+	wirePayload, err := native.PDFExtract(f, password)
+	if err != nil {
+		// Fall back to exiftool for unsupported PDF variants.
+		if errors.Is(err, native.ErrXREFStream) || errors.Is(err, native.ErrEncryptedPDF) {
+			return revealEX(carrierPath)
+		}
 		return nil, err
 	}
 
