@@ -252,12 +252,13 @@ NightCloak is progressively replacing external tool dependencies with native Go 
 - **JPEG COM** -- Done (v0.3.0). COM segment injection with automatic chaining for large payloads.
 - **JPEG APP1/EXIF** -- Done (v0.4.0). Parallel APP1 with valid TIFF/EXIF structure. Payload in UserComment tag with undefined charset. Default for all JPEG operations.
 - **MP3** -- Done (v0.5.0). ID3v2 TXXX frame injection with padding optimization. Handles v2.3 and v2.4. FFmpeg no longer required for MP3 files.
+- **PDF** -- Done (v0.6.0). Native object purging engine with flat XREF support. Parses the full XREF chain, injects payload into the /Info /Keywords field, and rewrites a clean single-pass PDF with no /Prev chain, no ghost objects, and a single %%EOF. Eliminates incremental update artifacts. Falls back to exiftool for compressed XREF streams (PDF 1.5+) and encrypted PDFs.
 
 **Goals:**
 
 - Zero child-process footprint for supported formats. No `exiftool` or `ffmpeg` in the process tree.
 - In-memory binary parsing via `io.Reader`/`io.Writer` interfaces. No temporary files.
-- Fully static, fully portable. External tools remain as a fallback for formats not yet handled natively (AVI, OGG, PDF).
+- Fully static, fully portable. External tools remain as a fallback for formats not yet handled natively (AVI, OGG, encrypted PDFs, and PDF 1.5+ compressed XREF streams).
 
 ## Disclaimer
 
