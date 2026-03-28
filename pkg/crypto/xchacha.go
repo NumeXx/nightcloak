@@ -87,22 +87,21 @@ func ResolveXKey() ([]byte, error) {
 
 	// Generate random key mode.
 	if keyStr == "-" {
-		key := make([]byte, KeySize)
-		if _, err := io.ReadFull(rand.Reader, key); err != nil {
-			return nil, fmt.Errorf("generating random key: %w", err)
-		}
-		// Display the first 22 Base58 characters of the full key.
-		// 22 chars ≈ 130 bits of entropy — above the 128-bit security floor.
-		// The full 32-byte key is used internally; only the display is shortened.
-		full := Base58Encode(key)
-		display := full
-		if len(display) > 22 {
-			display = display[:22]
-		}
-		fmt.Fprintf(os.Stderr, "  [KEY] %s\n", display)
-		return key, nil
-	}
+	        // Generate 12 random bytes (~16 characters in Base58).
+	        // This provides 96 bits of seed entropy, which is then 
+	        // expanded to a 256-bit key via SHA-256.
+	        seed := make([]byte, 12)
+	        if _, err := io.ReadFull(rand.Reader, seed); err != nil {
+	                return nil, fmt.Errorf("generating random seed: %w", err)
+	        }
 
+	        display := Base58Encode(seed)
+	        fmt.Fprintf(os.Stderr, "  [KEY] %s\n", display)
+
+	        // The actual key used is the hash of the displayed string.
+	        h := sha256.Sum256([]byte(display))
+	        return h[:], nil
+	}
 	// Try Base58 decode first.
 	decoded, err := Base58Decode(keyStr)
 	if err == nil && len(decoded) == KeySize {
