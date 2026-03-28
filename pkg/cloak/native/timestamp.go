@@ -2,6 +2,7 @@ package native
 
 import (
 	"os"
+	"syscall"
 	"time"
 )
 
@@ -12,18 +13,21 @@ type FileTimes struct {
 }
 
 // GetFileTimes captures the current atime and mtime of a file.
+// Supports high-precision timestamps on Linux and Darwin.
 func GetFileTimes(path string) (FileTimes, error) {
-	info, err := os.Stat(path)
+	fi, err := os.Stat(path)
 	if err != nil {
 		return FileTimes{}, err
 	}
+
+	stat := fi.Sys().(*syscall.Stat_t)
 	
-	// On Unix-like systems, we can get atime via sys info, 
-	// but for this implementation, we'll use ModTime for both 
-	// or standard OS stat info which Go handles gracefully.
+	// Platform specific atime extraction
+	atime := getAtime(stat)
+	
 	return FileTimes{
-		AccessTime: info.ModTime(), // Simplified for cross-platform
-		ModTime:    info.ModTime(),
+		AccessTime: atime,
+		ModTime:    fi.ModTime(),
 	}, nil
 }
 
