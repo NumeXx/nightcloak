@@ -97,23 +97,44 @@ func Hide(opts HideOpts) error {
 		return err
 	}
 
+	// Capture original timestamps for forensic preservation (time-stomping).
+	times, err := native.GetFileTimes(opts.CarrierPath)
+	if err != nil {
+		return fmt.Errorf("capturing timestamps: %w", err)
+	}
+
+	var hideErr error
 	ext := strings.ToLower(filepath.Ext(opts.CarrierPath))
 	switch {
 	case ext == ".png":
-		return hidePNGNative(opts)
+		hideErr = hidePNGNative(opts)
 	case ext == ".jpg" || ext == ".jpeg":
-		return hideJPEGExifNative(opts)
+		hideErr = hideJPEGExifNative(opts)
 	case ext == ".mp3":
-		return hideMP3Native(opts)
+		hideErr = hideMP3Native(opts)
 	case ext == ".pdf":
-		return hidePDFNative(opts)
+		hideErr = hidePDFNative(opts)
 	case ffmpegExtensions[ext]:
-		return hideFF(opts)
+		hideErr = hideFF(opts)
 	default:
-		return hideEX(opts)
+		hideErr = hideEX(opts)
 	}
-}
 
+	if hideErr != nil {
+		return hideErr
+	}
+
+	// Restore original timestamps to the modified file (the target).
+	target := opts.OutputPath
+	if target == "" {
+		target = opts.CarrierPath
+	}
+	if err := native.RestoreFileTimes(target, times); err != nil {
+		return fmt.Errorf("restoring timestamps: %w", err)
+	}
+
+	return nil
+}
 // Reveal extracts the payload from a carrier file's metadata.
 //
 // Routing: .png, .jpg/.jpeg, .mp3, and .pdf use native Go extractors.
