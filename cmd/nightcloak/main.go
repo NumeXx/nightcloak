@@ -561,10 +561,28 @@ func cmdGather(args []string) {
 	// Step 2: Parallel extraction — pass already-loaded Content directly into
 	// cloak.RevealReader, eliminating the second disk read that cloak.Reveal
 	// would otherwise perform.
+	//
+	// Producer-consumer: grouping runs in the main goroutine concurrently with
+	// extraction. Peak memory is proportional to NumCPU in-flight jobs rather
+	// than len(found) total payloads buffered before any grouping starts.
 	type extractResult struct {
 		path    string
 		payload []byte
 		err     error
+	}
+
+	// Step 3 state declared here so the drain loop below can write into it
+	// while workers are still running.
+	type shardGroup struct {
+		total    int
+		shards   map[int][]byte
+		manifest shard.Manifest
+	}
+	groups := make(map[[32]byte]*shardGroup)
+
+	workers := runtime.NumCPU()
+	if workers > len(found) {
+		workers = len(found)
 	}
 
 	type job struct{ r shard.ScanResult }
@@ -574,11 +592,7 @@ func cmdGather(args []string) {
 	}
 	close(jobs)
 
-	results := make(chan extractResult, len(found))
-	workers := runtime.NumCPU()
-	if workers > len(found) {
-		workers = len(found)
-	}
+	results := make(chan extractResult, workers*2)
 
 	var wg sync.WaitGroup
 	for i := 0; i < workers; i++ {
@@ -596,17 +610,13 @@ func cmdGather(args []string) {
 			}
 		}()
 	}
-	wg.Wait()
-	close(results)
 
-	// Step 3: Group extracted shards by PayloadID.
-	type shardGroup struct {
-		total    int
-		shards   map[int][]byte
-		manifest shard.Manifest
-	}
-	groups := make(map[[32]byte]*shardGroup)
+	// Close results once all workers have exited — in a separate goroutine so
+	// the main goroutine can drain concurrently rather than blocking on wg.Wait
+	// before processing begins.
+	go func() { wg.Wait(); close(results) }()
 
+	// Step 3: Group extracted shards by PayloadID, inline as results arrive.
 	for res := range results {
 		if res.err != nil {
 			log("skipping %s: %v", res.path, res.err)
