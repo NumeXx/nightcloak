@@ -2,12 +2,14 @@ package main
 
 import (
 	"fmt"
+	"hash/crc64"
 	"io"
 	"io/fs"
 	"math/rand"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,9 +17,10 @@ import (
 	"nightcloak/pkg/cloak/native"
 	"nightcloak/pkg/crypto"
 	"nightcloak/pkg/nightmare"
-	)
+	"nightcloak/pkg/shard"
+)
 
-	const version = "0.9.0-rc1"
+	const version = "0.9.0"
 
 	const banner = `
 	╔╗╔╦═╗╔═╗╦ ╦╔╦╗╔═╗╦  ╔═╗╔═╗╦╔═
@@ -43,6 +46,12 @@ import (
 	        cmdInspect(os.Args[2:])
 	case "dump":
 	        cmdDump(os.Args[2:])
+	case "split":
+		cmdSplit(os.Args[2:])
+	case "gather":
+		cmdGather(os.Args[2:])
+	case "scan":
+		cmdScan(os.Args[2:])
 	case "obfuscate":
 	        cmdObfuscate(os.Args[2:])
 	case "deobfuscate":
@@ -357,6 +366,323 @@ func cmdDeobfuscate(args []string) {
 }
 
 // ---------------------------------------------------------------------------
+// split: encrypt → RS split → inject shards into carriers → beacon-align
+// ---------------------------------------------------------------------------
+
+func cmdSplit(args []string) {
+	var password, totalStr, minStr string
+	args = parseFlags(args, map[string]*string{
+		"-p": &password, "--password": &password,
+		"-n": &totalStr,
+		"-k": &minStr,
+	}, map[string]*bool{})
+
+	if len(args) < 2 {
+		die("usage: nightcloak split <payload|file|-> <carrier_dir> [-n total] [-k min] [-p password]")
+	}
+
+	payloadArg := args[0]
+	carrierDir := args[1]
+
+	total := 6
+	minRequired := 4
+	if totalStr != "" {
+		n, err := strconv.Atoi(totalStr)
+		if err != nil || n < 2 {
+			die("invalid -n value: %s", totalStr)
+		}
+		total = n
+	}
+	if minStr != "" {
+		k, err := strconv.Atoi(minStr)
+		if err != nil || k < 1 {
+			die("invalid -k value: %s", minStr)
+		}
+		minRequired = k
+	}
+	if minRequired >= total {
+		die("-k (%d) must be less than -n (%d)", minRequired, total)
+	}
+	parityShards := total - minRequired
+
+	password = resolvePassword(password)
+
+	// Read and encrypt the payload (same pipeline as hide).
+	payload, _, _ := resolvePayload(payloadArg)
+	obfuscated := nightmare.NightmarifyBytes(payload)
+	encrypted, err := crypto.Encrypt([]byte(obfuscated), password)
+	if err != nil {
+		die("encryption failed: %v", err)
+	}
+	xkey, err := crypto.ResolveXKey()
+	if err != nil {
+		die("KEY resolution failed: %v", err)
+	}
+	if xkey != nil {
+		encrypted, err = crypto.XEncrypt(encrypted, xkey)
+		if err != nil {
+			die("secondary encryption failed: %v", err)
+		}
+	}
+
+	// Split encrypted payload into Reed-Solomon shards.
+	shards, err := shard.Split(encrypted, minRequired, parityShards, password)
+	if err != nil {
+		die("shard split failed: %v", err)
+	}
+
+	// Find N carrier files in the carrier directory.
+	carriers, err := findCarriersInDir(carrierDir, total)
+	if err != nil {
+		die("finding carriers in %s: %v", carrierDir, err)
+	}
+
+	// Inject each shard into a carrier then append beacon alignment bytes.
+	distributed := 0
+	for i, shardData := range shards {
+		carrier := carriers[i]
+
+		opts := cloak.HideOpts{
+			CarrierPath: carrier,
+			Payload:     shardData, // raw shard bytes (manifest + RS data), already encrypted
+			Type:        cloak.PayloadString,
+			Password:    password,
+		}
+		if err := cloak.Hide(opts); err != nil {
+			log("shard %d: inject into %s failed: %v", i, carrier, err)
+			continue
+		}
+
+		// Append 8 beacon-alignment bytes after the carrier's format boundary.
+		// Native parsers (JPEG/PNG/MP3/PDF) stop at their respective EOF markers;
+		// the appended bytes are invisible to standard tools.
+		if err := appendBeaconAlignment(carrier, password); err != nil {
+			log("shard %d: beacon alignment on %s failed: %v", i, carrier, err)
+			continue
+		}
+
+		distributed++
+	}
+
+	if distributed == 0 {
+		die("no shards could be distributed")
+	}
+	fmt.Fprintf(os.Stderr, "  [*] %d/%d shards distributed (recover with any %d)\n",
+		distributed, total, minRequired)
+}
+
+// appendBeaconAlignment reads the carrier file at path, computes the 8-byte
+// forced-match suffix, and appends it so that crc64(file) == beacon target.
+func appendBeaconAlignment(path, password string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	ecmaTable := crc64.MakeTable(crc64.ECMA)
+	current := crc64.Checksum(data, ecmaTable)
+	target := shard.DeriveBtarget(password)
+	padding := shard.FindPadding(current, target)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.Write(padding[:])
+	return err
+}
+
+// findCarriersInDir collects up to n carrier files from dir using the
+// quartile-age selection logic.
+func findCarriersInDir(dir string, n int) ([]string, error) {
+	var candidates []carrierCandidate
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !carrierExtensions[strings.ToLower(filepath.Ext(path))] {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		candidates = append(candidates, carrierCandidate{path: path, mtime: info.ModTime()})
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(candidates) < n {
+		return nil, fmt.Errorf("need %d carriers, found %d in %s", n, len(candidates), dir)
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].mtime.Before(candidates[j].mtime)
+	})
+	// Q2/Q3 preference — same logic as findCarrier.
+	pool := candidates
+	if len(candidates) >= 4 {
+		q1 := len(candidates) / 4
+		q3 := (3 * len(candidates)) / 4
+		pool = candidates[q1:q3]
+	}
+	rand.Shuffle(len(pool), func(i, j int) { pool[i], pool[j] = pool[j], pool[i] })
+	result := make([]string, n)
+	for i := 0; i < n; i++ {
+		result[i] = pool[i%len(pool)].path
+	}
+	return result, nil
+}
+
+// ---------------------------------------------------------------------------
+// gather: beacon scan → group by PayloadID → RS join → decrypt → output
+// ---------------------------------------------------------------------------
+
+func cmdGather(args []string) {
+	var password, output string
+	args = parseFlags(args, map[string]*string{
+		"-p": &password, "--password": &password,
+		"-o": &output, "--output": &output,
+	}, map[string]*bool{})
+
+	if len(args) < 1 {
+		die("usage: nightcloak gather <search_dir> [-p password] [-o output]")
+	}
+
+	searchDir := args[0]
+	password = resolvePassword(password)
+
+	// Step 1: Beacon scan.
+	log("Scanning %s for beacon-matching carriers...", searchDir)
+	found, err := shard.Scan(searchDir, password)
+	if err != nil {
+		die("scan failed: %v", err)
+	}
+	if len(found) == 0 {
+		die("no beacon-matching files found in %s", searchDir)
+	}
+	log("Found %d candidate(s)", len(found))
+
+	// Step 2: Extract shard bytes from each matched carrier and group by PayloadID.
+	type shardGroup struct {
+		total    int
+		shards   map[int][]byte
+		manifest shard.Manifest
+	}
+	groups := make(map[[32]byte]*shardGroup)
+
+	for _, r := range found {
+		// Extract the embedded shard from the carrier.
+		// cloak.Reveal strips the S: wire format and returns raw shard bytes.
+		result, err := cloak.Reveal(r.Path, password)
+		if err != nil {
+			log("skipping %s: extract failed: %v", r.Path, err)
+			continue
+		}
+
+		m, err := shard.DecodeManifest(result.Payload)
+		if err != nil {
+			log("skipping %s: manifest decode failed: %v", r.Path, err)
+			continue
+		}
+
+		g, ok := groups[m.PayloadID]
+		if !ok {
+			g = &shardGroup{
+				total:  int(m.DataShards) + int(m.ParityShards),
+				shards: make(map[int][]byte),
+			}
+			groups[m.PayloadID] = g
+		}
+		g.shards[int(m.ShardIndex)] = result.Payload
+		g.manifest = m
+	}
+
+	if len(groups) == 0 {
+		die("no valid shard manifests found")
+	}
+
+	// Step 3: Reconstruct the first complete (or most complete) group.
+	var bestGroup *shardGroup
+	for _, g := range groups {
+		if bestGroup == nil || len(g.shards) > len(bestGroup.shards) {
+			bestGroup = g
+		}
+	}
+
+	encodedShards := make([][]byte, bestGroup.total)
+	for idx, data := range bestGroup.shards {
+		encodedShards[idx] = data
+	}
+
+	log("Reconstructing from %d/%d shards (need %d)...",
+		len(bestGroup.shards), bestGroup.total, bestGroup.manifest.DataShards)
+
+	assembled, err := shard.Join(encodedShards, password)
+	if err != nil {
+		die("Reed-Solomon reconstruction failed: %v", err)
+	}
+
+	// Step 4: Reverse the encryption pipeline.
+	raw := assembled
+
+	xkey, err := crypto.ResolveXKey()
+	if err != nil {
+		die("KEY resolution failed: %v", err)
+	}
+	if xkey != nil {
+		raw, err = crypto.XDecrypt(raw, xkey)
+		if err != nil {
+			die("secondary decryption failed: %v", err)
+		}
+	}
+
+	decrypted, err := crypto.Decrypt(raw, password)
+	if err != nil {
+		die("decryption failed: %v", err)
+	}
+
+	clearBytes, err := nightmare.DreamifyBytes(string(decrypted))
+	if err != nil {
+		die("de-obfuscation failed: %v", err)
+	}
+
+	// Step 5: Output.
+	if output != "" {
+		if err := os.WriteFile(output, clearBytes, 0o644); err != nil {
+			die("writing output: %v", err)
+		}
+		log("Recovered %d bytes → %s", len(clearBytes), output)
+	} else {
+		os.Stdout.Write(clearBytes)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// scan: print paths of all beacon-matching files in a directory tree
+// ---------------------------------------------------------------------------
+
+func cmdScan(args []string) {
+	var password string
+	args = parseFlags(args, map[string]*string{
+		"-p": &password, "--password": &password,
+	}, map[string]*bool{})
+
+	if len(args) < 1 {
+		die("usage: nightcloak scan <dir> [-p password]")
+	}
+
+	dir := args[0]
+	password = resolvePassword(password)
+
+	found, err := shard.Scan(dir, password)
+	if err != nil {
+		die("scan failed: %v", err)
+	}
+
+	for _, r := range found {
+		fmt.Println(r.Path)
+	}
+	fmt.Fprintf(os.Stderr, "  [*] %d file(s) matched\n", len(found))
+}
+
+// ---------------------------------------------------------------------------
 // payload resolution
 // ---------------------------------------------------------------------------
 
@@ -541,6 +867,9 @@ func printUsage() {
   Commands:
     hide          Obfuscate, encrypt, and embed payload in a carrier file
     reveal        Extract, decrypt, and de-obfuscate payload from carrier
+    split         Encrypt, RS-shard, and distribute across multiple carriers
+    gather        Beacon-scan, reconstruct, and recover distributed payload
+    scan          List all beacon-matching files in a directory tree
     exec          Direct in-memory execution of payload (Linux only)
     inspect       Show file metadata tags (no decryption)
     dump          Extract and decrypt to stdout (raw, no de-obfuscation)
@@ -580,6 +909,36 @@ func printHelp() {
         Examples:
           nightcloak reveal photo.jpg -p mypass
           nightcloak reveal photo.jpg -p mypass -o recovered.txt
+
+    split <payload|file|-> <carrier_dir> [flags]
+        Encrypt → RS-shard → Inject into N carriers → CRC64 beacon-align.
+        Any K carriers are sufficient to recover the original payload.
+
+        -n <total>            Total shards to distribute (default: 6)
+        -k <min>              Minimum shards required for recovery (default: 4)
+        -p, --password <pw>   Encryption password (or NIGHT_PASSWORD)
+
+        Examples:
+          nightcloak split secret.bin ./media/ -n 6 -k 4 -p mypass
+          nightcloak split secret.bin ./media/ -p mypass
+
+    gather <search_dir> [flags]
+        Beacon-scan → Group by PayloadID → RS reconstruct → Decrypt → Output.
+
+        -p, --password <pw>   Decryption password (or NIGHT_PASSWORD)
+        -o, --output <path>   Write recovered payload to path (default: stdout)
+
+        Examples:
+          nightcloak gather ./media/ -p mypass -o recovered.bin
+          nightcloak gather ./media/ -p mypass
+
+    scan <dir> [flags]
+        Recursively walk dir and print paths of all beacon-matching files.
+
+        -p, --password <pw>   Password used to derive the beacon (or NIGHT_PASSWORD)
+
+        Examples:
+          nightcloak scan ./media/ -p mypass
 
     exec <carrier> [-- <args...>] [flags]
         Extract → Decrypt → De-obfuscate → Direct in-memory execution.
