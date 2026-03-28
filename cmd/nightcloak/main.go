@@ -17,7 +17,7 @@ import (
 	"nightcloak/pkg/nightmare"
 	)
 
-	const version = "0.8.1"
+	const version = "0.9.0-rc1"
 
 	const banner = `
 	╔╗╔╦═╗╔═╗╦ ╦╔╦╗╔═╗╦  ╔═╗╔═╗╦╔═

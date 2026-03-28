@@ -96,12 +96,6 @@ func CombineCRC64(crc1, crc2 uint64, len2 int64) uint64 {
 	return ^(s1 ^ (^crc2) ^ s0)
 }
 
-// DeriveBtarget returns the 64-bit beacon target for the given master secret.
-// All carrier files in a shard set are aligned to this value via FindPadding.
-func DeriveBtarget(secret string) uint64 {
-	return crc64.Checksum([]byte("nightcloak-beacon-v1:"+secret), ecmaTable)
-}
-
 // ---------------------------------------------------------------------------
 // Precomputed inverse of the CRC64 8-byte forward map (init-time)
 // ---------------------------------------------------------------------------
