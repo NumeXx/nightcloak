@@ -491,43 +491,26 @@ func appendBeaconAlignment(path, password string) error {
 	return err
 }
 
-// findCarriersInDir collects up to n carrier files from dir using the
-// quartile-age selection logic.
+// findCarriersInDir collects exactly n distinct carrier files from dir.
+// All candidates are shuffled and the first n are returned — no quartile
+// restriction, since every slot needs a unique file.
 func findCarriersInDir(dir string, n int) ([]string, error) {
-	var candidates []carrierCandidate
+	var candidates []string
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !carrierExtensions[strings.ToLower(filepath.Ext(path))] {
 			return nil
 		}
-		info, err := d.Info()
-		if err != nil {
-			return nil
-		}
-		candidates = append(candidates, carrierCandidate{path: path, mtime: info.ModTime()})
+		candidates = append(candidates, path)
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
 	if len(candidates) < n {
-		return nil, fmt.Errorf("need %d carriers, found %d in %s", n, len(candidates), dir)
+		return nil, fmt.Errorf("need %d carriers, found %d supported files in %s", n, len(candidates), dir)
 	}
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].mtime.Before(candidates[j].mtime)
-	})
-	// Q2/Q3 preference — same logic as findCarrier.
-	pool := candidates
-	if len(candidates) >= 4 {
-		q1 := len(candidates) / 4
-		q3 := (3 * len(candidates)) / 4
-		pool = candidates[q1:q3]
-	}
-	rand.Shuffle(len(pool), func(i, j int) { pool[i], pool[j] = pool[j], pool[i] })
-	result := make([]string, n)
-	for i := 0; i < n; i++ {
-		result[i] = pool[i%len(pool)].path
-	}
-	return result, nil
+	rand.Shuffle(len(candidates), func(i, j int) { candidates[i], candidates[j] = candidates[j], candidates[i] })
+	return candidates[:n], nil
 }
 
 // ---------------------------------------------------------------------------
