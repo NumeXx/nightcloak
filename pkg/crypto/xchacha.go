@@ -91,7 +91,15 @@ func ResolveXKey() ([]byte, error) {
 		if _, err := io.ReadFull(rand.Reader, key); err != nil {
 			return nil, fmt.Errorf("generating random key: %w", err)
 		}
-		fmt.Fprintf(os.Stderr, "  [KEY] %s\n", Base58Encode(key))
+		// Display the first 22 Base58 characters of the full key.
+		// 22 chars ≈ 130 bits of entropy — above the 128-bit security floor.
+		// The full 32-byte key is used internally; only the display is shortened.
+		full := Base58Encode(key)
+		display := full
+		if len(display) > 22 {
+			display = display[:22]
+		}
+		fmt.Fprintf(os.Stderr, "  [KEY] %s\n", display)
 		return key, nil
 	}
 

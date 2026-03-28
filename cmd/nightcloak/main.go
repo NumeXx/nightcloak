@@ -7,7 +7,9 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 
 	"nightcloak/pkg/cloak"
 	"nightcloak/pkg/cloak/native"
@@ -15,7 +17,7 @@ import (
 	"nightcloak/pkg/nightmare"
 	)
 
-	const version = "0.7.1"
+	const version = "0.8.0"
 
 	const banner = `
 	╔╗╔╦═╗╔═╗╦ ╦╔╦╗╔═╗╦  ╔═╗╔═╗╦╔═
@@ -439,19 +441,30 @@ var carrierExtensions = map[string]bool{
 	".png": true, ".jpg": true, ".jpeg": true, ".pdf": true,
 }
 
-// findCarrier walks the current directory tree and returns a random media
-// file suitable for use as a steganography carrier. The chosen path is
-// returned as-is (relative to cwd). Prints the absolute path to stderr.
+type carrierCandidate struct {
+	path  string
+	mtime time.Time
+}
+
+// findCarrier walks the current directory tree and returns a carrier file
+// from the 2nd or 3rd quartile of the mtime distribution (files that are
+// old enough to be unremarkable but not so old as to stand out as artifacts).
+// Falls back to a random pick if fewer than 4 candidates exist.
 func findCarrier() (string, error) {
-	var candidates []string
+	var candidates []carrierCandidate
 
 	err := filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // skip unreadable entries
 		}
-		if !d.IsDir() && carrierExtensions[strings.ToLower(filepath.Ext(path))] {
-			candidates = append(candidates, path)
+		if d.IsDir() || !carrierExtensions[strings.ToLower(filepath.Ext(path))] {
+			return nil
 		}
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		candidates = append(candidates, carrierCandidate{path: path, mtime: info.ModTime()})
 		return nil
 	})
 	if err != nil {
@@ -461,10 +474,26 @@ func findCarrier() (string, error) {
 		return "", fmt.Errorf("no suitable carrier found (.png/.jpg/.jpeg/.pdf) in current directory tree")
 	}
 
-	chosen := candidates[rand.Intn(len(candidates))]
-	abs, _ := filepath.Abs(chosen)
+	// Sort oldest → newest.
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].mtime.Before(candidates[j].mtime)
+	})
+
+	// Select from Q2/Q3 when there are enough candidates; otherwise pick randomly.
+	var pool []carrierCandidate
+	n := len(candidates)
+	if n >= 4 {
+		q1 := n / 4
+		q3 := (3 * n) / 4
+		pool = candidates[q1:q3]
+	} else {
+		pool = candidates
+	}
+
+	chosen := pool[rand.Intn(len(pool))]
+	abs, _ := filepath.Abs(chosen.path)
 	fmt.Fprintf(os.Stderr, "  [carrier] %s\n", abs)
-	return chosen, nil
+	return chosen.path, nil
 }
 
 // ---------------------------------------------------------------------------
