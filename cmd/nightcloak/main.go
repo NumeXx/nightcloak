@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"io"
+	"io/fs"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,7 +14,7 @@ import (
 	"nightcloak/pkg/nightmare"
 )
 
-const version = "0.6.0"
+const version = "0.7.0"
 
 const banner = `
     ╔╗╔╦═╗╔═╗╦ ╦╔╦╗╔═╗╦  ╔═╗╔═╗╦╔═
@@ -65,12 +67,24 @@ func cmdHide(args []string) {
 		"-k": &keepOriginal, "--keep": &keepOriginal,
 	})
 
-	if len(args) < 2 {
-		die("usage: nightcloak hide <carrier> <payload|file|-> [-p password] [-o output] [-k]")
+	// Auto-finder: if only one positional arg, treat it as payload and
+	// discover the carrier from supported media files in the current tree.
+	var carrierPath, payloadArg string
+	switch len(args) {
+	case 0:
+		die("usage: nightcloak hide [<carrier>] <payload|file|-> [-p password] [-o output] [-k]")
+	case 1:
+		payloadArg = args[0]
+		found, err := findCarrier()
+		if err != nil {
+			die("carrier auto-finder: %v", err)
+		}
+		carrierPath = found
+		log("Auto-selected carrier: %s", carrierPath)
+	default:
+		carrierPath = args[0]
+		payloadArg = args[1]
 	}
-
-	carrierPath := args[0]
-	payloadArg := args[1]
 
 	password = resolvePassword(password)
 
@@ -80,10 +94,22 @@ func cmdHide(args []string) {
 	// Step 1: Nightmarify (obfuscate).
 	obfuscated := nightmare.NightmarifyBytes(payload)
 
-	// Step 2: Encrypt.
+	// Step 2: Primary encrypt (ChaCha20-Poly1305 + PBKDF2).
 	encrypted, err := crypto.Encrypt([]byte(obfuscated), password)
 	if err != nil {
 		die("encryption failed: %v", err)
+	}
+
+	// Step 3: Optional secondary XChaCha20-Poly1305 layer (KEY env var).
+	xkey, err := crypto.ResolveXKey()
+	if err != nil {
+		die("KEY resolution failed: %v", err)
+	}
+	if xkey != nil {
+		encrypted, err = crypto.XEncrypt(encrypted, xkey)
+		if err != nil {
+			die("secondary encryption failed: %v", err)
+		}
 	}
 
 	// Step 3: Embed via cloak.
@@ -138,13 +164,27 @@ func cmdReveal(args []string) {
 		die("extraction failed: %v", err)
 	}
 
-	// Step 2: Decrypt.
-	decrypted, err := crypto.Decrypt(result.Payload, password)
+	raw := result.Payload
+
+	// Step 2: Strip optional secondary XChaCha20 layer (KEY env var).
+	xkey, err := crypto.ResolveXKey()
+	if err != nil {
+		die("KEY resolution failed: %v", err)
+	}
+	if xkey != nil {
+		raw, err = crypto.XDecrypt(raw, xkey)
+		if err != nil {
+			die("secondary decryption failed: %v", err)
+		}
+	}
+
+	// Step 3: Primary decrypt (ChaCha20-Poly1305 + PBKDF2).
+	decrypted, err := crypto.Decrypt(raw, password)
 	if err != nil {
 		die("decryption failed: %v", err)
 	}
 
-	// Step 3: Dreamify (de-obfuscate).
+	// Step 4: Dreamify (de-obfuscate).
 	clearBytes, err := nightmare.DreamifyBytes(string(decrypted))
 	if err != nil {
 		die("de-obfuscation failed: %v", err)
@@ -206,8 +246,22 @@ func cmdDump(args []string) {
 		die("extraction failed: %v", err)
 	}
 
-	// Step 2: Decrypt.
-	decrypted, err := crypto.Decrypt(result.Payload, password)
+	raw := result.Payload
+
+	// Step 2: Strip optional secondary XChaCha20 layer.
+	xkey, err := crypto.ResolveXKey()
+	if err != nil {
+		die("KEY resolution failed: %v", err)
+	}
+	if xkey != nil {
+		raw, err = crypto.XDecrypt(raw, xkey)
+		if err != nil {
+			die("secondary decryption failed: %v", err)
+		}
+	}
+
+	// Step 3: Primary decrypt.
+	decrypted, err := crypto.Decrypt(raw, password)
 	if err != nil {
 		die("decryption failed: %v", err)
 	}
@@ -316,6 +370,43 @@ func parseFlags(args []string, strFlags map[string]*string, boolFlags map[string
 		}
 	}
 	return positional
+}
+
+// ---------------------------------------------------------------------------
+// carrier auto-finder
+// ---------------------------------------------------------------------------
+
+// carrierExtensions are the file types eligible for automatic carrier selection.
+var carrierExtensions = map[string]bool{
+	".png": true, ".jpg": true, ".jpeg": true, ".pdf": true,
+}
+
+// findCarrier walks the current directory tree and returns a random media
+// file suitable for use as a steganography carrier. The chosen path is
+// returned as-is (relative to cwd). Prints the absolute path to stderr.
+func findCarrier() (string, error) {
+	var candidates []string
+
+	err := filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil // skip unreadable entries
+		}
+		if !d.IsDir() && carrierExtensions[strings.ToLower(filepath.Ext(path))] {
+			candidates = append(candidates, path)
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	if len(candidates) == 0 {
+		return "", fmt.Errorf("no suitable carrier found (.png/.jpg/.jpeg/.pdf) in current directory tree")
+	}
+
+	chosen := candidates[rand.Intn(len(candidates))]
+	abs, _ := filepath.Abs(chosen)
+	fmt.Fprintf(os.Stderr, "  [carrier] %s\n", abs)
+	return chosen, nil
 }
 
 // ---------------------------------------------------------------------------
