@@ -167,6 +167,71 @@ func Reveal(carrierPath string, password string) (*RevealResult, error) {
 	}
 }
 
+// RevealReader extracts a payload from content that is already loaded in
+// memory. ext must be the lowercase file extension including the dot
+// (e.g. ".jpg"). This avoids a second disk read when the caller (e.g.
+// cmdGather) already holds the file bytes from a prior scan.
+//
+// For formats routed to exiftool the content is written to a temp file;
+// native paths stream directly from a bytes.Reader.
+func RevealReader(content []byte, ext, password string) (*RevealResult, error) {
+	r := bytes.NewReader(content)
+	switch {
+	case ext == ".png":
+		wirePayload, err := native.PNGExtract(r, password)
+		if err != nil {
+			return nil, err
+		}
+		return parseDescription(string(wirePayload))
+
+	case ext == ".jpg" || ext == ".jpeg":
+		wirePayload, err := native.JPEGExifExtract(r, password)
+		if err != nil {
+			return nil, err
+		}
+		return parseDescription(string(wirePayload))
+
+	case ext == ".mp3":
+		wirePayload, err := native.MP3Extract(r, password)
+		if err != nil {
+			return nil, err
+		}
+		return parseDescription(string(wirePayload))
+
+	case ext == ".pdf":
+		wirePayload, err := native.PDFExtract(r, password)
+		if errors.Is(err, native.ErrXREFStream) || errors.Is(err, native.ErrEncryptedPDF) {
+			return revealExFromContent(content, ext)
+		}
+		if err != nil {
+			return nil, err
+		}
+		return parseDescription(string(wirePayload))
+
+	default:
+		return revealExFromContent(content, ext)
+	}
+}
+
+// revealExFromContent writes content to a temp file and runs exiftool on it.
+// Used by RevealReader for formats not handled natively.
+func revealExFromContent(content []byte, ext string) (*RevealResult, error) {
+	tmp, err := os.CreateTemp("", "nightcloak-reveal-*"+ext)
+	if err != nil {
+		return nil, fmt.Errorf("creating temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+
+	if _, err := tmp.Write(content); err != nil {
+		tmp.Close()
+		return nil, fmt.Errorf("writing temp file: %w", err)
+	}
+	tmp.Close()
+
+	return revealEX(tmpPath)
+}
+
 // ---------------------------------------------------------------------------
 // native PNG path: zero external dependencies
 // ---------------------------------------------------------------------------

