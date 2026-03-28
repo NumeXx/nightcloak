@@ -1,6 +1,6 @@
 # NightCloak
 
-A statically-linked Go binary that unifies metadata steganography and string obfuscation into a single tool. NightCloak embeds encrypted payloads into file metadata (EXIF, ID3, Matroska, XMP) through a multi-layer pipeline: obfuscation, authenticated encryption, and native binary injection.
+A statically-linked Go binary that unifies metadata steganography and string obfuscation into a single tool. NightCloak embeds encrypted payloads into file metadata (EXIF, ID3, XMP) through a multi-layer pipeline: obfuscation, authenticated encryption, and native binary injection. It also supports distributed resiliency via Reed-Solomon erasure coding and CRC64 algebraic beacon discovery.
 
 This project is a port and modernization of the original [cloak.sh](https://github.com/Jiab77/cloak) steganography tool and [nightmare](https://codeberg.org/Jiab77/nightmare) obfuscation tool created by **Doctor Who (Jiab77)**. The core logic, metadata wire format, and operational philosophy are preserved. The implementation is new.
 
@@ -9,6 +9,8 @@ This project is a port and modernization of the original [cloak.sh](https://gith
 [![asciicast](https://asciinema.org/a/Cy4iyjsL1FAJd8OE.svg)](https://asciinema.org/a/Cy4iyjsL1FAJd8OE)
 
 ## How It Works
+
+### Single-Carrier Pipeline
 
 ```
              hide                                    reveal
@@ -40,7 +42,34 @@ This project is a port and modernization of the original [cloak.sh](https://gith
     everything else ──> exiftool -@ - (stdin stream)
 ```
 
-Folders are compressed to zip archives in memory before entering the pipeline. The entire chain runs without writing intermediate plaintext to disk.
+### Distributed Pipeline (Ghost Network)
+
+```
+              split                                  gather
+              -----                                  ------
+
+  payload                                     N carrier files in directory
+     |                                             |
+     v                                             v
+  nightmare + ChaCha20 encrypt           CRC64 beacon scan (parallel, NumCPU workers)
+     |                                   Beacon = HMAC-SHA256(password, "nightcloak-beacon-v1")[:8]
+     v                                             |
+  Reed-Solomon(K data, P parity)                   v
+  ──> K+P encoded shard blobs            RevealReader per matched carrier (parallel)
+     |   each with 52-byte manifest            |
+     |   (index, K, P, PayloadID, size)        v
+     v                                   group shards by PayloadID
+  inject each shard into a carrier       Reed-Solomon reconstruct (tolerates up to P lost)
+     |                                         |
+     v                                         v
+  append 8 CRC64 alignment bytes        ChaCha20 decrypt ──> nightmare decode
+  so file CRC64 == beacon target              |
+     |                                         v
+     v                                   original payload
+  N carrier files, each CRC64-tagged
+```
+
+Any K of the K+P carrier files are sufficient to recover the original payload. The beacon allows stateless discovery of carrier files in any directory without a manifest or filename list.
 
 ## Attribution
 
@@ -50,7 +79,7 @@ The original tools were written by **Doctor Who (Jiab77)**:
 - **nightmare** (v0.0.0) -- Bash string obfuscator using a Hex-to-Base82 chain that produces output resembling Base64 but failing every standard decoder.
 - **base82** -- Jiab77's custom encoding scheme (hosted on [Codeberg](https://codeberg.org/Jiab77/base82)), which is Base64 with a ROT13+ROT5 character substitution overlay.
 
-NightCloak is a ground-up Go rewrite By **Me (NumeX)**. It is not a wrapper around the original scripts.
+NightCloak is a ground-up Go rewrite by **Me (NumeX)**. It is not a wrapper around the original scripts.
 
 ## Modernizations
 
@@ -62,11 +91,11 @@ NightCloak uses **ChaCha20-Poly1305** (AEAD). Every decryption operation verifie
 
 ### Multi-Layer Security (XChaCha20)
 
-NightCloak supports an optional secondary encryption layer using **XChaCha20-Poly1305**. When the `KEY` environment variable is set, the payload is wrapped in an additional encrypted envelope with an independent 24-byte nonce. This provides double-layered protection for sensitive data.
+NightCloak supports an optional secondary encryption layer using **XChaCha20-Poly1305**. When the `KEY` environment variable is set, the payload is wrapped in an additional encrypted envelope with an independent 24-byte nonce. This provides double-layered protection with independent key material.
 
 ### Self-Contained Key Derivation
 
-The original tool generates a `key.dat` file on first run (`openssl rand -base64 32`) and requires it to be present for decryption. NightCloak derives keys from a user password using **PBKDF2-HMAC-SHA256**. A random 12-byte salt is generated per encryption and stored in the ciphertext header. No external key files required.
+The original tool generates a `key.dat` file on first run (`openssl rand -base64 32`) and requires it to be present for decryption. NightCloak derives keys from a user password using **PBKDF2-HMAC-SHA256** (100k iterations). A random 12-byte salt is generated per encryption and stored in the ciphertext header. No external key files required.
 
 ### Native Zero-Dependency Engine
 
@@ -74,12 +103,38 @@ All obfuscation and cryptographic operations run natively in Go. For the most co
 
 - **PNG:** Injects a tEXt chunk before the IEND marker. The injector streams the file chunk-by-chunk without loading the full carrier into memory.
 - **JPEG (Stealth/Default):** Constructs a parallel APP1 segment containing a valid TIFF/EXIF structure. The payload is stored in the UserComment (0x9286) tag with an undefined charset prefix, making the binary payload indistinguishable from camera-vendor encoded comments.
-- **MP3:** Injects a TXXX frame into the ID3v2 tag. Uses a **padding-first optimization** that overwrites existing ID3v2 padding to avoid shifting the audio stream, ensuring bit-perfect audio preservation.
-- **PDF:** Implements a **Native Purge Engine** that parses the full XREF chain and re-emits a clean single-pass PDF. This eliminates incremental update artifacts and "ghost data" traces common in PDF metadata editors.
+- **MP3:** Injects a TXXX frame into the ID3v2 tag. Uses a **padding-first optimization** that overwrites existing ID3v2 padding to avoid shifting the audio stream, ensuring bit-perfect audio preservation. Verified by SHA256 comparison in the test suite.
+- **PDF:** Implements a **Native Purge Engine** that parses the full XREF chain and re-emits a clean single-pass PDF. This eliminates incremental update artifacts and ghost data traces common in PDF metadata editors. Falls back to exiftool for PDF 1.5+ compressed XREF streams and encrypted PDFs.
 
-### Native Memory Orchestration (Linux)
+### Distributed Resiliency (Reed-Solomon + CRC64 Beacon)
 
-For advanced research workflows, NightCloak includes an `exec` command that performs **In-Memory Execution**. Using the `memfd_create` syscall, payloads are extracted directly into an anonymous file descriptor in RAM and executed without the binary ever touching the physical disk.
+NightCloak implements a distributed steganography layer that splits a payload across multiple carrier files with erasure-code redundancy:
+
+- **Reed-Solomon encoding** (`pkg/shard`): A `(K, P)` scheme splits the encrypted payload into K data shards plus P parity shards. Any K of the K+P carriers are sufficient for full recovery — up to P carriers may be lost or deleted.
+
+- **CRC64 algebraic beacon**: Each carrier file has 8 bytes appended such that `CRC64(file) == HMAC-SHA256(password, "nightcloak-beacon-v1")[:8]`. The 8-byte solution is computed in O(64) using the precomputed inverse of the CRC64/ECMA GF(2)-linear map. A parallel scanner (`NumCPU` goroutines) identifies all carrier files in a directory tree in a single pass — no filename list, no manifest file, no external state.
+
+- **Self-describing shard manifests**: Each shard carries a 52-byte header containing its index, total shard counts, original payload size, and a per-payload HMAC identifier. The scanner can group shards from multiple independent split operations in a single directory.
+
+### Automation and Environment Variables
+
+NightCloak integrates into automated pipelines via environment variables:
+
+| Variable | Priority | Behavior |
+|---|---|---|
+| `NIGHT_PASSWORD` | 2nd (after `-p` flag) | Primary decryption password |
+| `KEY` | Checked per operation | Secondary XChaCha20 key (any string, or a Base58-decoded 32-byte key) |
+| `KEY=-` | Checked per operation | Generate a random key, print Base58 to stderr, use for this operation |
+
+### Cross-Platform Builds
+
+NightCloak cross-compiles cleanly to all major platforms without CGO:
+
+```bash
+GOOS=linux   GOARCH=amd64 CGO_ENABLED=0 go build ./...
+GOOS=darwin  GOARCH=arm64 CGO_ENABLED=0 go build ./...
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build ./...
+```
 
 ## Usage
 
@@ -89,49 +144,70 @@ For advanced research workflows, NightCloak includes an `exec` command that perf
 CGO_ENABLED=0 go build -o nightcloak cmd/nightcloak/main.go
 ```
 
-Produces a single static binary (~4.3MB, no CGO, zero runtime dependencies for core formats).
+Produces a single static binary with no runtime dependencies for core formats.
 
-### Hide a payload
+### Single-Carrier Operations
 
 ```bash
-# Standard hide
+# Hide a payload in a JPEG
 nightcloak hide photo.jpg "secret message" -p mypass
 
-# Automated carrier discovery (scans current tree for .jpg/.png/.pdf)
+# Automated carrier discovery (scans current directory tree)
 nightcloak hide payload.bin -p mypass
 
-# Double encryption with random Base58 key generation
-KEY=- nightcloak hide photo.jpg payload.bin
-# Output: [KEY] 56WDRVGkfjRKAFt54jQRwodFghL5...
+# Double encryption: primary password + secondary XChaCha20 key
+KEY=- nightcloak hide photo.jpg payload.bin -p mypass
+# stderr: [KEY] <base58key>  ← save this for reveal
+
+# Reveal
+nightcloak reveal photo.jpg -p mypass
+KEY="<base58key>" nightcloak reveal photo.jpg -p mypass
+
+# Pipe to stdout
+nightcloak reveal photo.jpg -p mypass | file -
 ```
 
-### Reveal / Execute
+### Distributed Ghost Network
 
 ```bash
-# Extract to file
-nightcloak reveal photo.jpg -p mypass
+# Split a payload across 6 carriers (recover from any 4)
+nightcloak split secret.bin ./media/ -n 6 -k 4 -p mypass
 
-# Direct In-Memory Execution (Linux only)
-nightcloak exec carrier.pdf -p mypass -- -arg1 -arg2
+# Scan a directory for beacon-matching carriers
+nightcloak scan ./media/ -p mypass
+
+# Reconstruct from surviving carriers (tolerates up to 2 lost)
+nightcloak gather ./media/ -p mypass -o recovered.bin
+
+# Full pipeline with double encryption
+export NIGHT_PASSWORD="mypass"
+export KEY="myxkey"
+nightcloak split secret.bin ./media/ -n 6 -k 4
+nightcloak gather ./media/ -o recovered.bin
 ```
 
-### Automation and Environment Variables
+### Automation
 
-NightCloak integrates seamlessly into automated pipelines:
+```bash
+export NIGHT_PASSWORD="mypassword"
 
-- **`NIGHT_PASSWORD`**: Set the primary decryption password.
-- **`KEY`**: Set the secondary XChaCha20 key.
-- **`KEY=-`**: Automatically generate a secure Base58 key.
+# No -p flag needed
+nightcloak hide photo.jpg secret.bin -o hidden.jpg
+nightcloak reveal hidden.jpg
+
+# Generate a random XChaCha20 key
+KEY=- nightcloak hide photo.jpg payload.bin
+```
 
 ## Requirements
 
-| Dependency | Required for | macOS | Linux | Windows |
-|---|---|---|---|---|
-| Go 1.25+ | Building from source | [golang.org](https://go.dev/dl/) | [golang.org](https://go.dev/dl/) | [golang.org](https://go.dev/dl/) |
-| `exiftool` | Legacy formats (TIFF, etc.) | Optional | Optional | Optional |
-| `ffmpeg` | Legacy video (AVI, OGG) | Optional | Optional | Optional |
+| Dependency | Required for | Install |
+|---|---|---|
+| Go 1.21+ | Building from source | [golang.org](https://go.dev/dl/) |
+| `exiftool` | TIFF, encrypted PDF, PDF 1.5+ compressed XREF (optional) | `brew install exiftool` / `apt install libimage-exiftool-perl` |
+| `ffmpeg` | AVI, OGG containers (optional) | `brew install ffmpeg` / `apt install ffmpeg` |
 
-Core formats (**PNG, JPEG, MP3, PDF**) have **Zero Dependencies**.
+Core formats (**PNG, JPEG, MP3, PDF**) require no external tools. The distributed pipeline (`split`/`gather`/`scan`) requires no external tools on any platform.
 
 ## Tests
 
@@ -139,7 +215,19 @@ Core formats (**PNG, JPEG, MP3, PDF**) have **Zero Dependencies**.
 go test ./... -v
 ```
 
-Comprehensive test suite covering byte-level integrity, cryptographic roundtrips, and forensic cleanliness.
+113 tests across five packages (`nightmare`, `crypto`, `cloak`, `cloak/native`, `shard`) covering byte-level integrity, cryptographic roundtrips, Reed-Solomon recovery, CRC64 algebraic inversion, and forensic cleanliness.
+
+## Native Zero-Dependency Status
+
+| Format | Injection method | External tool needed? |
+|---|---|---|
+| `.jpg` / `.jpeg` | Native EXIF APP1 UserComment | No |
+| `.png` | Native tEXt chunk | No |
+| `.mp3` | Native ID3v2 TXXX frame | No |
+| `.pdf` (flat XREF) | Native /Info /Keywords + purge rewrite | No |
+| `.pdf` (1.5+ XREF stream / encrypted) | exiftool fallback | Yes |
+| `.avi` / `.ogg` | ffmpeg FFMETADATA1 | Yes |
+| `.tiff` / others | exiftool | Yes |
 
 ## Disclaimer
 
@@ -147,5 +235,5 @@ This tool is intended for authorized security testing, research, and educational
 
 ## Credits
 
-- **Me (NumeX)** -- Go modernization and native engines
+- **Me (NumeX)** -- Go modernization, native engines, distributed resiliency layer
 - **Doctor Who (Jiab77)** -- Original author of `cloak.sh`, `nightmare`, and `base82`

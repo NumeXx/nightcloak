@@ -22,7 +22,7 @@ import (
 	"nightcloak/pkg/shard"
 )
 
-	const version = "0.9.3"
+	const version = "0.9.4"
 
 	const banner = `
 	╔╗╔╦═╗╔═╗╦ ╦╔╦╗╔═╗╦  ╔═╗╔═╗╦╔═
