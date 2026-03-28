@@ -10,53 +10,55 @@ import (
 	"strings"
 
 	"nightcloak/pkg/cloak"
+	"nightcloak/pkg/cloak/native"
 	"nightcloak/pkg/crypto"
 	"nightcloak/pkg/nightmare"
-)
+	)
 
-const version = "0.7.0"
+	const version = "0.7.1"
 
-const banner = `
-    ╔╗╔╦═╗╔═╗╦ ╦╔╦╗╔═╗╦  ╔═╗╔═╗╦╔═
-    ║║║║ ╠╣ ╦╠═╣ ║ ║  ║  ║ ║╠═╣╠╩╗
-    ╝╚╝╩═╝╚═╝╩ ╩ ╩ ╚═╝╩═╝╚═╝╩ ╩╩ ╩
-    ─── nightmare + cloak ── v%s ───
-`
+	const banner = `
+	╔╗╔╦═╗╔═╗╦ ╦╔╦╗╔═╗╦  ╔═╗╔═╗╦╔═
+	║║║║ ╠╣ ╦╠═╣ ║ ║  ║  ║ ║╠═╣╠╩╗
+	╝╚╝╩═╝╚═╝╩ ╩ ╩ ╚═╝╩═╝╚═╝╩ ╩╩ ╩
+	─── nightmare + cloak ── v%s ───
+	`
 
-func main() {
+	func main() {
 	if len(os.Args) < 2 {
-		printUsage()
-		os.Exit(1)
+	        printUsage()
+	        os.Exit(1)
 	}
 
 	switch os.Args[1] {
 	case "hide":
-		cmdHide(os.Args[2:])
+	        cmdHide(os.Args[2:])
 	case "reveal":
-		cmdReveal(os.Args[2:])
+	        cmdReveal(os.Args[2:])
+	case "exec":
+	        cmdExec(os.Args[2:])
 	case "inspect":
-		cmdInspect(os.Args[2:])
+	        cmdInspect(os.Args[2:])
 	case "dump":
-		cmdDump(os.Args[2:])
+	        cmdDump(os.Args[2:])
 	case "obfuscate":
-		cmdObfuscate(os.Args[2:])
+	        cmdObfuscate(os.Args[2:])
 	case "deobfuscate":
-		cmdDeobfuscate(os.Args[2:])
+	        cmdDeobfuscate(os.Args[2:])
 	case "-h", "--help", "help":
-		printHelp()
+	        printHelp()
 	case "-v", "--version", "version":
-		fmt.Printf("nightcloak %s\n", version)
+	        fmt.Printf("nightcloak %s\n", version)
 	case "--thc":
-		printTHC()
+	        printTHC()
 	default:
-		die("unknown command: %s", os.Args[1])
+	        die("unknown command: %s", os.Args[1])
 	}
-}
+	}
 
-// ---------------------------------------------------------------------------
-// hide: nightmarify → encrypt → embed
-// ---------------------------------------------------------------------------
-
+	// ---------------------------------------------------------------------------
+	// hide: nightmarify → encrypt → embed
+	// ---------------------------------------------------------------------------
 func cmdHide(args []string) {
 	var password, output string
 	var keepOriginal bool
@@ -201,14 +203,70 @@ func cmdReveal(args []string) {
 		}
 		log("Extracted to %s (%d bytes)", output, len(clearBytes))
 	} else {
-		os.Stdout.Write(clearBytes)
+	        os.Stdout.Write(clearBytes)
 	}
-}
+	}
 
-// ---------------------------------------------------------------------------
-// inspect: show file metadata tags
-// ---------------------------------------------------------------------------
+	// ---------------------------------------------------------------------------
+	// exec: extract → decrypt → dreamify → in-memory execution
+	// ---------------------------------------------------------------------------
 
+	func cmdExec(args []string) {
+	var password string
+	args = parseFlags(args, map[string]*string{
+	        "-p": &password, "--password": &password,
+	}, map[string]*bool{})
+
+	if len(args) < 1 {
+	        die("usage: nightcloak exec <carrier> [-- <args...>]")
+	}
+
+	carrierPath := args[0]
+	execArgs := args[1:]
+
+	password = resolvePassword(password)
+	// Step 1: Extract via cloak.
+	result, err := cloak.Reveal(carrierPath, password)
+	if err != nil {
+	        die("extraction failed: %v", err)
+	}
+
+	raw := result.Payload
+
+	// Step 2: Strip optional secondary XChaCha20 layer (KEY env var).
+	xkey, err := crypto.ResolveXKey()
+	if err != nil {
+	        die("KEY resolution failed: %v", err)
+	}
+	if xkey != nil {
+	        raw, err = crypto.XDecrypt(raw, xkey)
+	        if err != nil {
+	                die("secondary decryption failed: %v", err)
+	        }
+	}
+
+	// Step 3: Primary decrypt (ChaCha20-Poly1305 + PBKDF2).
+	decrypted, err := crypto.Decrypt(raw, password)
+	if err != nil {
+	        die("decryption failed: %v", err)
+	}
+
+	// Step 4: Dreamify (de-obfuscate).
+	clearBytes, err := nightmare.DreamifyBytes(string(decrypted))
+	if err != nil {
+	        die("de-obfuscation failed: %v", err)
+	}
+
+	// Step 5: Execute directly from memory.
+	log("Executing payload in-memory...")
+	if err := native.MemExec(clearBytes, execArgs); err != nil {
+	        die("in-memory execution failed: %v", err)
+	}
+	}
+
+	// ---------------------------------------------------------------------------
+	// inspect: show file metadata tags
+	// ---------------------------------------------------------------------------
 func cmdInspect(args []string) {
 	if len(args) < 1 {
 		die("usage: nightcloak inspect <file>")
@@ -454,6 +512,7 @@ func printUsage() {
   Commands:
     hide          Obfuscate, encrypt, and embed payload in a carrier file
     reveal        Extract, decrypt, and de-obfuscate payload from carrier
+    exec          Direct in-memory execution of payload (Linux only)
     inspect       Show file metadata tags (no decryption)
     dump          Extract and decrypt to stdout (raw, no de-obfuscation)
     obfuscate     Pure nightmare encoding (no encryption)
@@ -492,6 +551,16 @@ func printHelp() {
         Examples:
           nightcloak reveal photo.jpg -p mypass
           nightcloak reveal photo.jpg -p mypass -o recovered.txt
+
+    exec <carrier> [-- <args...>] [flags]
+        Extract → Decrypt → De-obfuscate → Direct in-memory execution.
+        The binary never touches the disk (Linux only).
+
+        -p, --password <pw>   Decryption password (prompted if omitted)
+
+        Examples:
+          nightcloak exec carrier.pdf -p mypass
+          nightcloak exec carrier.pdf -p mypass -- -a -l
 
     inspect <file>
         Show all metadata tags from a file (no decryption).
