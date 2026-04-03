@@ -141,8 +141,9 @@ func Hide(opts HideOpts) error {
 	}
 
 	// Restore parent directory timestamps to hide the evidence of file creation/renaming.
+	// Non-fatal: shared directories (e.g. /tmp) may reject chtimes if the caller is not the owner.
 	if err := native.RestoreFileTimes(parentDir, parentTimes); err != nil {
-		return fmt.Errorf("restoring parent directory timestamps: %w", err)
+		fmt.Fprintf(os.Stderr, "  [~] Warning: could not restore parent directory timestamps (%s): %v\n", parentDir, err)
 	}
 
 	return nil

@@ -78,7 +78,7 @@ func TestDecrypt_Tampered(t *testing.T) {
 	// Flip a byte in the ciphertext portion (after the header).
 	tampered := make([]byte, len(ct))
 	copy(tampered, ct)
-	tampered[headerSize+1] ^= 0xFF
+	tampered[v2HeaderSize+1] ^= 0xFF
 
 	_, err := Decrypt(tampered, "password")
 	if err == nil {
@@ -93,10 +93,54 @@ func TestCiphertextFormat(t *testing.T) {
 		t.Fatalf("Encrypt error: %v", err)
 	}
 
-	expectedLen := SaltSize + NonceSize + len(plaintext) + chacha20poly1305.Overhead
+	// v2 wire format: 4B magic + 16B salt + 12B nonce + payload + 16B tag
+	expectedLen := v2HeaderSize + len(plaintext) + chacha20poly1305.Overhead
 	if len(ct) != expectedLen {
-		t.Errorf("ciphertext length = %d, want %d (salt:%d + nonce:%d + payload:%d + tag:%d)",
-			len(ct), expectedLen, SaltSize, NonceSize, len(plaintext), chacha20poly1305.Overhead)
+		t.Errorf("ciphertext length = %d, want %d (magic:4 + salt:%d + nonce:%d + payload:%d + tag:%d)",
+			len(ct), expectedLen, v2SaltSize, NonceSize, len(plaintext), chacha20poly1305.Overhead)
+	}
+}
+
+func TestCiphertextV2Magic(t *testing.T) {
+	ct, err := Encrypt([]byte("hello"), "pass")
+	if err != nil {
+		t.Fatalf("Encrypt error: %v", err)
+	}
+	if !isV2(ct) {
+		t.Error("Encrypt output missing v2 magic prefix")
+	}
+}
+
+func TestDecrypt_V1LegacyCompat(t *testing.T) {
+	// Produce a v1 (PBKDF2) blob directly and confirm Decrypt still reads it.
+	password := "legacy-pass"
+	plaintext := []byte("old payload")
+
+	salt := make([]byte, v1SaltSize)
+	nonce := make([]byte, NonceSize)
+	for i := range salt {
+		salt[i] = byte(i + 1)
+	}
+	for i := range nonce {
+		nonce[i] = byte(i + 10)
+	}
+
+	aead, err := newPBKDF2AEAD(password, salt)
+	if err != nil {
+		t.Fatalf("newPBKDF2AEAD: %v", err)
+	}
+
+	blob := make([]byte, 0, v1HeaderSize+len(plaintext)+aead.Overhead())
+	blob = append(blob, salt...)
+	blob = append(blob, nonce...)
+	blob = aead.Seal(blob, nonce, plaintext, nil)
+
+	got, err := Decrypt(blob, password)
+	if err != nil {
+		t.Fatalf("Decrypt v1 blob: %v", err)
+	}
+	if string(got) != string(plaintext) {
+		t.Errorf("v1 compat: got %q, want %q", got, plaintext)
 	}
 }
 // ---------------------------------------------------------------------------
