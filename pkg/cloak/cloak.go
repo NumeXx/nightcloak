@@ -148,6 +148,114 @@ func Hide(opts HideOpts) error {
 
 	return nil
 }
+// Wipe removes the nightcloak payload from a carrier file, restoring it to
+// a clean state. Timestamps are restored after the operation.
+//
+// Routing mirrors Hide: native paths for PNG, JPEG, MP3, PDF. Exiftool for
+// everything else.
+func Wipe(carrierPath, password string) error {
+	if _, err := os.Stat(carrierPath); err != nil {
+		return fmt.Errorf("carrier file: %w", err)
+	}
+
+	times, err := native.GetFileTimes(carrierPath)
+	if err != nil {
+		return fmt.Errorf("capturing timestamps: %w", err)
+	}
+
+	parentDir := filepath.Dir(carrierPath)
+	parentTimes, err := native.GetFileTimes(parentDir)
+	if err != nil {
+		return fmt.Errorf("capturing parent directory timestamps: %w", err)
+	}
+
+	ext := strings.ToLower(filepath.Ext(carrierPath))
+
+	var wipeErr error
+	switch {
+	case ext == ".png":
+		wipeErr = wipeNative(carrierPath, func(src io.Reader, dst io.Writer) error {
+			return native.PNGWipe(src, dst, password)
+		})
+	case ext == ".jpg" || ext == ".jpeg":
+		wipeErr = wipeNative(carrierPath, func(src io.Reader, dst io.Writer) error {
+			return native.JPEGExifWipe(src, dst, password)
+		})
+	case ext == ".mp3":
+		wipeErr = wipeNative(carrierPath, func(src io.Reader, dst io.Writer) error {
+			return native.MP3Wipe(src, dst, password)
+		})
+	case ext == ".pdf":
+		wipeErr = wipeNative(carrierPath, func(src io.Reader, dst io.Writer) error {
+			err := native.PDFWipe(src, dst)
+			if errors.Is(err, native.ErrXREFStream) || errors.Is(err, native.ErrEncryptedPDF) {
+				return wipeEX(carrierPath)
+			}
+			return err
+		})
+	default:
+		wipeErr = wipeEX(carrierPath)
+	}
+
+	if wipeErr != nil {
+		return wipeErr
+	}
+
+	if err := native.RestoreFileTimes(carrierPath, times); err != nil {
+		return fmt.Errorf("restoring timestamps: %w", err)
+	}
+
+	if err := native.RestoreFileTimes(parentDir, parentTimes); err != nil {
+		fmt.Fprintf(os.Stderr, "  [~] Warning: could not restore parent directory timestamps (%s): %v\n", parentDir, err)
+	}
+
+	return nil
+}
+
+// wipeNative opens carrierPath, runs fn(src, dst) into a temp file, then
+// atomically replaces the carrier in-place.
+func wipeNative(carrierPath string, fn func(io.Reader, io.Writer) error) error {
+	src, err := os.Open(carrierPath)
+	if err != nil {
+		return fmt.Errorf("opening carrier: %w", err)
+	}
+	defer src.Close()
+
+	dir := filepath.Dir(carrierPath)
+	ext := filepath.Ext(carrierPath)
+	tmp, err := os.CreateTemp(dir, "nightcloak-wipe-*"+ext)
+	if err != nil {
+		return fmt.Errorf("creating temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+
+	if err := fn(src, tmp); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	tmp.Close()
+
+	return os.Rename(tmpPath, carrierPath)
+}
+
+// wipeEX clears the Description and Comment tags via exiftool.
+func wipeEX(carrierPath string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "exiftool",
+		"-P", "-overwrite_original",
+		"-description=", "-comment=",
+		carrierPath,
+	)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("exiftool wipe failed: %w", err)
+	}
+	return nil
+}
+
 // Reveal extracts the payload from a carrier file's metadata.
 //
 // Routing: .png, .jpg/.jpeg, .mp3, and .pdf use native Go extractors.

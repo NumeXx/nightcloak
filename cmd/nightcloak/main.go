@@ -42,6 +42,8 @@ import (
 	        cmdHide(os.Args[2:])
 	case "reveal":
 	        cmdReveal(os.Args[2:])
+	case "wipe":
+		cmdWipe(os.Args[2:])
 	case "exec":
 	        cmdExec(os.Args[2:])
 	case "inspect":
@@ -276,6 +278,30 @@ func cmdReveal(args []string) {
 	        die("in-memory execution failed: %v", err)
 	}
 	}
+
+	// ---------------------------------------------------------------------------
+	// wipe: remove embedded payload, restore carrier to clean state
+	// ---------------------------------------------------------------------------
+
+func cmdWipe(args []string) {
+	var password string
+	args = parseFlags(args, map[string]*string{
+		"-p": &password, "--password": &password,
+	}, map[string]*bool{})
+
+	if len(args) < 1 {
+		die("usage: nightcloak wipe <carrier> [-p password]")
+	}
+
+	carrierPath := args[0]
+	password = resolvePassword(password)
+
+	if err := cloak.Wipe(carrierPath, password); err != nil {
+		die("wipe failed: %v", err)
+	}
+
+	log("Payload removed from %s", carrierPath)
+}
 
 	// ---------------------------------------------------------------------------
 	// inspect: show file metadata tags
@@ -936,6 +962,7 @@ func printUsage() {
   Commands:
     hide          Obfuscate, encrypt, and embed payload in a carrier file
     reveal        Extract, decrypt, and de-obfuscate payload from carrier
+    wipe          Remove embedded payload, restore carrier to clean state
     split         Encrypt, RS-shard, and distribute across multiple carriers
     gather        Beacon-scan, reconstruct, and recover distributed payload
     scan          List all beacon-matching files in a directory tree
@@ -978,6 +1005,16 @@ func printHelp() {
         Examples:
           nightcloak reveal photo.jpg -p mypass
           nightcloak reveal photo.jpg -p mypass -o recovered.txt
+
+    wipe <carrier> [flags]
+        Remove the embedded payload from a carrier file. The file is rewritten
+        in-place without the nightcloak data. Timestamps are restored.
+
+        -p, --password <pw>   Password used during hide (prompted if omitted)
+
+        Examples:
+          nightcloak wipe photo.jpg -p mypass
+          nightcloak wipe document.pdf -p mypass
 
     split <payload|file|-> <carrier_dir> [flags]
         Encrypt → RS-shard → Inject into N carriers → CRC64 beacon-align.
