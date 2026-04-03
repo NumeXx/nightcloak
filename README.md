@@ -22,7 +22,7 @@ This project is a port and modernization of the original [cloak.sh](https://gith
   hex encode ──> base64 ──> ROT13/5         parse metadata ──> extract payload
      |          (nightmare layer)                  |
      v                                             v
-  PBKDF2(password, salt) ──> ChaCha20-Poly1305    ChaCha20-Poly1305 ──> verify tag ──> decrypt
+  Argon2id(password, salt) ──> ChaCha20-Poly1305   ChaCha20-Poly1305 ──> verify tag ──> decrypt
      |                       (crypto layer)        |
      v                                             v
   [Optional] XChaCha20 Layer (KEY env)      [Optional] Strip XChaCha20 (KEY env)
@@ -51,7 +51,7 @@ This project is a port and modernization of the original [cloak.sh](https://gith
   payload                                     N carrier files in directory
      |                                             |
      v                                             v
-  nightmare + ChaCha20 encrypt           CRC64 beacon scan (parallel, NumCPU workers)
+  nightmare + Argon2id + ChaCha20 encrypt  CRC64 beacon scan (parallel, NumCPU workers)
      |                                   Beacon = HMAC-SHA256(password, "nightcloak-beacon-v1")[:8]
      v                                             |
   Reed-Solomon(K data, P parity)                   v
@@ -62,7 +62,7 @@ This project is a port and modernization of the original [cloak.sh](https://gith
   inject each shard into a carrier       Reed-Solomon reconstruct (tolerates up to P lost)
      |                                         |
      v                                         v
-  append 8 CRC64 alignment bytes        ChaCha20 decrypt ──> nightmare decode
+  append 8 CRC64 alignment bytes        Argon2id + ChaCha20 decrypt ──> nightmare decode
   so file CRC64 == beacon target              |
      |                                         v
      v                                   original payload
@@ -93,9 +93,11 @@ NightCloak uses **ChaCha20-Poly1305** (AEAD). Every decryption operation verifie
 
 NightCloak supports an optional secondary encryption layer using **XChaCha20-Poly1305**. When the `KEY` environment variable is set, the payload is wrapped in an additional encrypted envelope with an independent 24-byte nonce. This provides double-layered protection with independent key material.
 
-### Self-Contained Key Derivation
+### Memory-Hard Key Derivation (Argon2id)
 
-The original tool generates a `key.dat` file on first run (`openssl rand -base64 32`) and requires it to be present for decryption. NightCloak derives keys from a user password using **PBKDF2-HMAC-SHA256** (100k iterations). A random 12-byte salt is generated per encryption and stored in the ciphertext header. No external key files required.
+NightCloak derives encryption keys using **Argon2id** (time=3, memory=64MB, parallelism=4). Unlike PBKDF2, Argon2id is memory-hard: each password attempt requires 64MB of RAM, making GPU-based brute-force attacks economically infeasible regardless of hardware budget. A random 16-byte salt is generated per encryption and stored in the ciphertext header. No external key files required.
+
+Old blobs encrypted with the legacy PBKDF2 layer are transparently detected and still decrypt correctly.
 
 ### Native Zero-Dependency Engine
 
@@ -105,6 +107,10 @@ All obfuscation and cryptographic operations run natively in Go. For the most co
 - **JPEG (Stealth/Default):** Constructs a parallel APP1 segment containing a valid TIFF/EXIF structure. The payload is stored in the UserComment (0x9286) tag with an undefined charset prefix, making the binary payload indistinguishable from camera-vendor encoded comments.
 - **MP3:** Injects a TXXX frame into the ID3v2 tag. Uses a **padding-first optimization** that overwrites existing ID3v2 padding to avoid shifting the audio stream, ensuring bit-perfect audio preservation. Verified by SHA256 comparison in the test suite.
 - **PDF:** Implements a **Native Purge Engine** that parses the full XREF chain and re-emits a clean single-pass PDF. This eliminates incremental update artifacts and ghost data traces common in PDF metadata editors. Falls back to exiftool for PDF 1.5+ compressed XREF streams and encrypted PDFs.
+
+### Surgical Wipe
+
+The `wipe` command removes an embedded payload from a carrier file and restores it to a clean state. The operation is format-aware: PNG drops the matching tEXt chunk, JPEG strips the injected APP1 segment, MP3 removes the TXXX frame, PDF purge-rewrites without /Keywords. Carrier timestamps are restored after wipe.
 
 ### Distributed Resiliency (Reed-Solomon + CRC64 Beacon)
 
@@ -157,11 +163,14 @@ nightcloak hide payload.bin -p mypass
 
 # Double encryption: primary password + secondary XChaCha20 key
 KEY=- nightcloak hide photo.jpg payload.bin -p mypass
-# stderr: [KEY] <base58key>  ← save this for reveal
+# stderr: [KEY] <base58key>  <- save this for reveal
 
 # Reveal
 nightcloak reveal photo.jpg -p mypass
 KEY="<base58key>" nightcloak reveal photo.jpg -p mypass
+
+# Wipe: remove embedded payload, restore carrier to clean state
+nightcloak wipe photo.jpg -p mypass
 
 # Pipe to stdout
 nightcloak reveal photo.jpg -p mypass | file -
@@ -215,7 +224,7 @@ Core formats (**PNG, JPEG, MP3, PDF**) require no external tools. The distribute
 go test ./... -v
 ```
 
-113 tests across five packages (`nightmare`, `crypto`, `cloak`, `cloak/native`, `shard`) covering byte-level integrity, cryptographic roundtrips, Reed-Solomon recovery, CRC64 algebraic inversion, and forensic cleanliness.
+115 tests across five packages (`nightmare`, `crypto`, `cloak`, `cloak/native`, `shard`) covering byte-level integrity, cryptographic roundtrips, Reed-Solomon recovery, CRC64 algebraic inversion, and forensic cleanliness.
 
 ## Native Zero-Dependency Status
 
