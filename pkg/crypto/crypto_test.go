@@ -144,6 +144,144 @@ func TestDecrypt_V1LegacyCompat(t *testing.T) {
 	}
 }
 // ---------------------------------------------------------------------------
+// v3 wire format tests (compression + padding + machine lock)
+// ---------------------------------------------------------------------------
+
+func TestEncryptV3_RoundTrip(t *testing.T) {
+	cases := []struct {
+		name     string
+		payload  string
+		compress bool
+		lock     bool
+	}{
+		{"plain", "hello world", false, false},
+		{"compressed", strings.Repeat("AAAAAAAAAA", 200), true, false},
+		{"locked", "machine-bound secret", false, true},
+		{"compressed+locked", strings.Repeat("BBBBBBBB", 200), true, true},
+		{"empty", "", false, false},
+		{"binary", string([]byte{0x00, 0xFF, 0x80, 0x7F}), false, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ct, err := EncryptV3([]byte(tc.payload), "password", tc.compress, tc.lock)
+			if err != nil {
+				t.Fatalf("EncryptV3: %v", err)
+			}
+			pt, err := Decrypt(ct, "password")
+			if err != nil {
+				t.Fatalf("Decrypt: %v", err)
+			}
+			if string(pt) != tc.payload {
+				t.Errorf("roundtrip mismatch: got %q, want %q", pt, tc.payload)
+			}
+		})
+	}
+}
+
+func TestEncryptV3_MagicPrefix(t *testing.T) {
+	ct, err := EncryptV3([]byte("test"), "pass", false, false)
+	if err != nil {
+		t.Fatalf("EncryptV3: %v", err)
+	}
+	if !isV3(ct) {
+		t.Error("EncryptV3 output missing v3 magic prefix")
+	}
+	if isV2(ct) {
+		t.Error("EncryptV3 output incorrectly matches v2 magic")
+	}
+}
+
+func TestEncryptV3_RandomPadding(t *testing.T) {
+	// Same input must produce different-length ciphertext across runs
+	// because pad length is randomized.
+	sizes := make(map[int]bool)
+	for i := 0; i < 20; i++ {
+		ct, err := EncryptV3([]byte("same payload"), "pass", false, false)
+		if err != nil {
+			t.Fatalf("EncryptV3: %v", err)
+		}
+		sizes[len(ct)] = true
+	}
+	if len(sizes) < 2 {
+		t.Error("EncryptV3 produced identical sizes across 20 runs — padding not varying")
+	}
+}
+
+func TestEncryptV3_CompressionFlag(t *testing.T) {
+	// Highly compressible payload: flag should be set.
+	payload := bytes.Repeat([]byte("AAAA"), 500)
+	ct, err := EncryptV3(payload, "pass", true, false)
+	if err != nil {
+		t.Fatalf("EncryptV3: %v", err)
+	}
+	flags := ct[4]
+	if flags&v3FlagCompressed == 0 {
+		t.Error("FlagCompressed not set for compressible payload")
+	}
+
+	// Incompressible payload (random bytes): flag should NOT be set.
+	random := make([]byte, 256)
+	for i := range random {
+		random[i] = byte(i)
+	}
+	ct2, err := EncryptV3(random, "pass", true, false)
+	if err != nil {
+		t.Fatalf("EncryptV3 incompressible: %v", err)
+	}
+	// Don't assert flag state — depends on entropy of input. Just verify roundtrip.
+	got, err := Decrypt(ct2, "pass")
+	if err != nil {
+		t.Fatalf("Decrypt incompressible: %v", err)
+	}
+	if !bytes.Equal(got, random) {
+		t.Error("incompressible roundtrip mismatch")
+	}
+}
+
+func TestEncryptV3_WrongPassword(t *testing.T) {
+	ct, _ := EncryptV3([]byte("secret"), "correct", false, false)
+	_, err := Decrypt(ct, "wrong")
+	if err == nil {
+		t.Error("expected error with wrong password, got nil")
+	}
+}
+
+func TestEncryptV3_MachineLock(t *testing.T) {
+	ct, err := EncryptV3([]byte("locked payload"), "pass", false, true)
+	if err != nil {
+		t.Fatalf("EncryptV3 locked: %v", err)
+	}
+	flags := ct[4]
+	if flags&v3FlagLocked == 0 {
+		t.Error("FlagLocked not set")
+	}
+	// Decrypt on the same machine should succeed.
+	pt, err := Decrypt(ct, "pass")
+	if err != nil {
+		t.Fatalf("Decrypt locked on same machine: %v", err)
+	}
+	if string(pt) != "locked payload" {
+		t.Errorf("got %q, want %q", pt, "locked payload")
+	}
+}
+
+func TestEncryptV3_V2StillDecrypts(t *testing.T) {
+	// v2 blobs produced by Encrypt must still decrypt after adding v3 support.
+	ct, err := Encrypt([]byte("old payload"), "pass")
+	if err != nil {
+		t.Fatalf("Encrypt v2: %v", err)
+	}
+	pt, err := Decrypt(ct, "pass")
+	if err != nil {
+		t.Fatalf("Decrypt v2 after v3 added: %v", err)
+	}
+	if string(pt) != "old payload" {
+		t.Errorf("v2 compat: got %q, want %q", pt, "old payload")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // XChaCha20-Poly1305 layer tests
 // ---------------------------------------------------------------------------
 

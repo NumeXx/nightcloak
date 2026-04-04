@@ -22,7 +22,7 @@ import (
 	"nightcloak/pkg/shard"
 )
 
-	const version = "0.9.5"
+	const version = "0.9.6"
 
 	const banner = `
 	╔╗╔╦═╗╔═╗╦ ╦╔╦╗╔═╗╦  ╔═╗╔═╗╦╔═
@@ -76,12 +76,14 @@ import (
 	// ---------------------------------------------------------------------------
 func cmdHide(args []string) {
 	var password, output string
-	var keepOriginal bool
+	var keepOriginal, compress, lock bool
 	args = parseFlags(args, map[string]*string{
 		"-p": &password, "--password": &password,
 		"-o": &output, "--output": &output,
 	}, map[string]*bool{
 		"-k": &keepOriginal, "--keep": &keepOriginal,
+		"-z": &compress, "--compress": &compress,
+		"--lock": &lock,
 	})
 
 	// Auto-finder: if only one positional arg, treat it as payload and
@@ -111,8 +113,8 @@ func cmdHide(args []string) {
 	// Step 1: Nightmarify (obfuscate).
 	obfuscated := nightmare.NightmarifyBytes(payload)
 
-	// Step 2: Primary encrypt (ChaCha20-Poly1305 + PBKDF2).
-	encrypted, err := crypto.Encrypt([]byte(obfuscated), password)
+	// Step 2: Primary encrypt (v3: Argon2id + random padding, optional compression + machine lock).
+	encrypted, err := crypto.EncryptV3([]byte(obfuscated), password, compress, lock)
 	if err != nil {
 		die("encryption failed: %v", err)
 	}

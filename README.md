@@ -99,6 +99,16 @@ NightCloak derives encryption keys using **Argon2id** (time=3, memory=64MB, para
 
 Old blobs encrypted with the legacy PBKDF2 layer are transparently detected and still decrypt correctly.
 
+### Anti-Forensic Ciphertext (v3 Format)
+
+Every `hide` operation now produces a v3 blob with two hardened properties:
+
+- **Random padding**: 0–512 bytes of random data are prepended inside the encrypted envelope before sealing. The same payload hidden twice produces different ciphertext sizes, defeating size-based carrier anomaly detection.
+- **Optional compression** (`--compress`): DEFLATE compression is applied before encryption. Only activates when it actually reduces the payload size. Useful for large text payloads or files.
+- **Optional machine binding** (`--lock`): The encryption key is derived from the current machine's hardware identity (`/etc/machine-id` on Linux, `hw.uuid` on macOS, MAC address fallback). A locked carrier cannot be decrypted on any other host, even with the correct password.
+
+`reveal` auto-detects v3, v2, and v1 formats — no flags needed on the receiving end.
+
 ### Native Zero-Dependency Engine
 
 All obfuscation and cryptographic operations run natively in Go. For the most common formats, NightCloak performs surgical binary manipulation without spawning child processes or touching temporary files:
@@ -172,6 +182,15 @@ KEY="<base58key>" nightcloak reveal photo.jpg -p mypass
 # Wipe: remove embedded payload, restore carrier to clean state
 nightcloak wipe photo.jpg -p mypass
 
+# Compress payload before encryption (useful for large text payloads)
+nightcloak hide photo.jpg payload.txt -p mypass --compress
+
+# Lock carrier to current machine (decryption fails on any other host)
+nightcloak hide photo.jpg "secret" -p mypass --lock
+
+# Both
+nightcloak hide photo.jpg "secret" -p mypass --compress --lock
+
 # Pipe to stdout
 nightcloak reveal photo.jpg -p mypass | file -
 ```
@@ -224,7 +243,7 @@ Core formats (**PNG, JPEG, MP3, PDF**) require no external tools. The distribute
 go test ./... -v
 ```
 
-115 tests across five packages (`nightmare`, `crypto`, `cloak`, `cloak/native`, `shard`) covering byte-level integrity, cryptographic roundtrips, Reed-Solomon recovery, CRC64 algebraic inversion, and forensic cleanliness.
+122 tests across five packages (`nightmare`, `crypto`, `cloak`, `cloak/native`, `shard`) covering byte-level integrity, cryptographic roundtrips, Reed-Solomon recovery, CRC64 algebraic inversion, and forensic cleanliness.
 
 ## Native Zero-Dependency Status
 
