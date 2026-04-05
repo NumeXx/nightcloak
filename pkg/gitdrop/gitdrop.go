@@ -10,9 +10,28 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"strings"
 )
+
+var commitMessages = []string{
+	"docs: update README",
+	"chore: cleanup",
+	"fix: typo",
+	"ci: update workflow",
+	"chore: update dependencies",
+	"docs: fix broken link",
+	"fix: minor cleanup",
+	"chore: formatting",
+	"ci: bump runner version",
+	"docs: improve examples",
+	"fix: remove unused code",
+	"chore: update config",
+	"ci: update cache settings",
+	"docs: update contributing guide",
+	"chore: housekeeping",
+}
 
 const DefaultRef = "refs/nc/latest"
 const blobEntryName = "data"
@@ -185,7 +204,7 @@ func (c *Client) createTree(blobSHA string) (string, error) {
 
 func (c *Client) createCommit(treeSHA string) (string, error) {
 	body := map[string]interface{}{
-		"message": "chore: update",
+		"message": commitMessages[rand.Intn(len(commitMessages))],
 		"tree":    treeSHA,
 		"parents": []string{}, // orphan — no parent commits
 	}
