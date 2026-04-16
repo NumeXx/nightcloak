@@ -869,6 +869,8 @@ func parseFlags(args []string, strFlags map[string]*string, boolFlags map[string
 // carrierExtensions are the file types eligible for automatic carrier selection.
 var carrierExtensions = map[string]bool{
 	".png": true, ".jpg": true, ".jpeg": true, ".pdf": true,
+	".txt": true, ".md": true, ".html": true, ".htm": true,
+	".json": true, ".xml": true, ".csv": true,
 }
 
 type carrierCandidate struct {
@@ -1187,9 +1189,13 @@ func printHelp() {
         -o, --output <path>   Write to path instead of replacing carrier
         -k, --keep            Keep original carrier (auto-generates output path)
 
+        Carriers: .png .jpg .jpeg .mp3 .pdf (metadata injection)
+                  .txt .md .html .json .xml .csv (Unicode zero-width chars)
+
         Examples:
           nightcloak hide photo.jpg "secret message" -p mypass
           nightcloak hide photo.jpg secret.txt -p mypass
+          nightcloak hide README.md secret.txt -p mypass
           nightcloak hide photo.jpg ./secret_folder/ -p mypass -k
           cat payload.bin | nightcloak hide photo.jpg - -p mypass
 

@@ -87,6 +87,13 @@ var ffmpegExtensions = map[string]bool{
 	".ogg": true,
 }
 
+// textExtensions use the Unicode zero-width char carrier (no external deps).
+var textExtensions = map[string]bool{
+	".txt": true, ".md": true,
+	".html": true, ".htm": true,
+	".json": true, ".xml": true, ".csv": true,
+}
+
 // Hide embeds a payload into the carrier file's metadata tags.
 //
 // Routing: .png, .jpg/.jpeg, .mp3, and .pdf use native Go injectors (zero
@@ -121,6 +128,8 @@ func Hide(opts HideOpts) error {
 		hideErr = hideMP3Native(opts)
 	case ext == ".pdf":
 		hideErr = hidePDFNative(opts)
+	case textExtensions[ext]:
+		hideErr = hideUnicodeNative(opts)
 	case ffmpegExtensions[ext]:
 		hideErr = hideFF(opts)
 	default:
@@ -193,6 +202,8 @@ func Wipe(carrierPath, password string) error {
 			}
 			return err
 		})
+	case textExtensions[ext]:
+		wipeErr = wipeUnicodeNative(carrierPath)
 	default:
 		wipeErr = wipeEX(carrierPath)
 	}
@@ -271,6 +282,8 @@ func Reveal(carrierPath string, password string) (*RevealResult, error) {
 		return revealMP3Native(carrierPath, password)
 	case ext == ".pdf":
 		return revealPDFNative(carrierPath, password)
+	case textExtensions[ext]:
+		return revealUnicodeNative(carrierPath)
 	default:
 		return revealEX(carrierPath)
 	}
@@ -312,6 +325,13 @@ func RevealReader(content []byte, ext, password string) (*RevealResult, error) {
 		if errors.Is(err, native.ErrXREFStream) || errors.Is(err, native.ErrEncryptedPDF) {
 			return revealExFromContent(content, ext)
 		}
+		if err != nil {
+			return nil, err
+		}
+		return parseDescription(string(wirePayload))
+
+	case textExtensions[ext]:
+		wirePayload, err := native.UnicodeExtract(content)
 		if err != nil {
 			return nil, err
 		}
@@ -564,6 +584,49 @@ func revealPDFNative(carrierPath string, password string) (*RevealResult, error)
 	}
 
 	return parseDescription(string(wirePayload))
+}
+
+// ---------------------------------------------------------------------------
+// native text path: Unicode zero-width char injection
+// ---------------------------------------------------------------------------
+
+func hideUnicodeNative(opts HideOpts) error {
+	outputPath := resolveOutput(opts)
+	wirePayload := buildWirePayload(opts)
+
+	data, err := os.ReadFile(opts.CarrierPath)
+	if err != nil {
+		return fmt.Errorf("reading carrier: %w", err)
+	}
+	out := native.UnicodeInject(data, wirePayload)
+	if err := os.WriteFile(outputPath, out, 0o644); err != nil {
+		return fmt.Errorf("writing output: %w", err)
+	}
+	return replaceIfNeeded(opts, outputPath)
+}
+
+func revealUnicodeNative(carrierPath string) (*RevealResult, error) {
+	data, err := os.ReadFile(carrierPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading carrier: %w", err)
+	}
+	wirePayload, err := native.UnicodeExtract(data)
+	if err != nil {
+		return nil, err
+	}
+	return parseDescription(string(wirePayload))
+}
+
+func wipeUnicodeNative(carrierPath string) error {
+	data, err := os.ReadFile(carrierPath)
+	if err != nil {
+		return fmt.Errorf("reading carrier: %w", err)
+	}
+	clean, err := native.UnicodeWipe(data)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(carrierPath, clean, 0o644)
 }
 
 // buildWirePayload encodes the payload into the cloak wire format
