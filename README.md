@@ -1,14 +1,14 @@
 # NightCloak
 
-A statically-linked Go binary that unifies metadata steganography and string obfuscation into a single tool. NightCloak embeds encrypted payloads into file metadata (EXIF, ID3, XMP) through a multi-layer pipeline: obfuscation, authenticated encryption, and native binary injection. Supports distributed resiliency via Reed-Solomon erasure coding and CRC64 algebraic beacon discovery.
+A statically-linked Go binary that unifies metadata steganography and string obfuscation into a single tool. NightCloak embeds encrypted payloads into file metadata (EXIF, ID3, XMP) and plain text files through a multi-layer pipeline: obfuscation, authenticated encryption, and native binary injection. Supports distributed resiliency via Reed-Solomon erasure coding and CRC64 algebraic beacon discovery.
 
 Port and modernization of [cloak.sh](https://github.com/Jiab77/cloak) and [nightmare](https://codeberg.org/Jiab77/nightmare) by **Doctor Who (Jiab77)**. The core logic, wire format philosophy, and operational model are preserved. The implementation is new.
 
 ---
 
-## Demo
+## Screenshot
 
-[![asciicast](https://asciinema.org/a/Cy4iyjsL1FAJd8OE.svg)](https://asciinema.org/a/Cy4iyjsL1FAJd8OE)
+![nightcloak](docs/screenshot.png)
 
 ---
 
@@ -22,17 +22,17 @@ hide                                            reveal
 payload                                     carrier file
   │                                               │
   ▼                                               ▼
-hex → base64 → ROT13/5               parse metadata → extract
+hex -> base64 -> ROT13/5               parse metadata -> extract
   │         (nightmare)                            │
   ▼                                               ▼
-Argon2id(pw, salt) → ChaCha20-Poly1305     ChaCha20 → verify tag → decrypt
+Argon2id(pw, salt) -> ChaCha20-Poly1305     ChaCha20 -> verify tag -> decrypt
   │                  (crypto layer)                │
   ▼                                               ▼
 [optional] XChaCha20 envelope (KEY=)   [optional] strip XChaCha20
   │                                               │
   ▼                                               ▼
-inject into carrier metadata            ROT13/5 → base64 → hex → payload
-             (cloak layer)
+inject into carrier                     ROT13/5 -> base64 -> hex -> payload
+       (cloak layer)
 ```
 
 **Format routing:**
@@ -44,6 +44,7 @@ inject into carrier metadata            ROT13/5 → base64 → hex → payload
 | `.mp3` | Native ID3v2 TXXX frame | No |
 | `.pdf` (flat XREF) | Native /Info purge + rewrite | No |
 | `.pdf` (1.5+ / encrypted) | exiftool fallback | Yes |
+| `.txt` / `.md` / `.html` / `.htm` / `.json` / `.xml` / `.csv` | Native Unicode zero-width chars | No |
 | `.avi` / `.ogg` | ffmpeg FFMETADATA1 | Yes |
 | `.tiff` / others | exiftool | Yes |
 
@@ -59,7 +60,7 @@ nightmare + Argon2id + ChaCha20         CRC64 beacon scan (parallel)
   │                                   Beacon = HMAC-SHA256(pw, label)[:8]
   ▼                                               │
 Reed-Solomon(K data, P parity)                    ▼
-→ K+P encoded shard blobs             RevealReader per matched carrier
+-> K+P encoded shard blobs             RevealReader per matched carrier
   │  each with 52-byte manifest                   │
   │  (index, K, P, PayloadID, size)               ▼
   ▼                                   group shards by PayloadID
@@ -67,7 +68,7 @@ inject each shard into carrier        Reed-Solomon reconstruct
   │                                               │
   ▼                                               ▼
 append 8 CRC64 alignment bytes        Argon2id + ChaCha20 decrypt
-so CRC64(file) == beacon target       → nightmare decode → payload
+so CRC64(file) == beacon target       -> nightmare decode -> payload
 ```
 
 Any K of K+P carriers recover the original payload. The beacon enables stateless discovery across any directory without a manifest or filename list.
@@ -80,14 +81,14 @@ git-hide                                    git-reveal
 payload                                     GitHub repo URL
   │                                               │
   ▼                                               ▼
-nightmare + Argon2id + ChaCha20         GET refs/nc/latest → commit SHA
+nightmare + Argon2id + ChaCha20         GET refs/nc/latest -> commit SHA
   │                                               │
   ▼                                               ▼
-POST blob → tree → orphan commit          GET blob → ciphertext
-  → push refs/nc/latest (or custom ref)           │
+POST blob -> tree -> orphan commit          GET blob -> ciphertext
+  -> push refs/nc/latest (or custom ref)           │
                                                   ▼
                                           Argon2id + ChaCha20 decrypt
-                                          → nightmare decode → payload
+                                          -> nightmare decode -> payload
                                           [--exec: MemExec directly from RAM]
 ```
 
@@ -99,7 +100,7 @@ Payload is stored as an encrypted git blob object under a custom ref. The ref is
 
 ### Authenticated Encryption
 
-Original `cloak.sh` uses `openssl chacha20 -pbkdf2` — an unauthenticated stream cipher. A tampered ciphertext decrypts silently to garbage.
+Original `cloak.sh` uses `openssl chacha20 -pbkdf2`, an unauthenticated stream cipher. A tampered ciphertext decrypts silently to garbage.
 
 NightCloak uses **ChaCha20-Poly1305** (AEAD). Every decryption verifies a 16-byte Poly1305 tag before returning plaintext. Modification, wrong password, or truncation all fail explicitly with an error.
 
@@ -116,13 +117,13 @@ When `KEY` is set, the payload is wrapped in an **XChaCha20-Poly1305** envelope 
 ### Anti-Forensic Ciphertext (v3 Format)
 
 > [!NOTE]
-> v3 is the default output format since v0.9.6. `reveal` auto-detects v3 / v2 / v1 — no flags needed on the receiving end.
+> v3 is the default output format since v0.9.6. `reveal` auto-detects v3 / v2 / v1, no flags needed on the receiving end.
 
 **Wire format:** `[4B magic][1B flags][16B salt][12B nonce][ciphertext + tag]`
 
 | Flag | Behavior |
 |---|---|
-| *(always on)* random padding | 0–512 bytes of random data prepended inside the envelope. Same payload hides to different ciphertext sizes each run. |
+| *(always on)* random padding | 0-512 bytes of random data prepended inside the envelope. Same payload hides to different ciphertext sizes each run. |
 | `--compress` | DEFLATE before encryption. Only activates when it actually reduces size. |
 | `--lock` | Key derived from hardware identity (`/etc/machine-id`, `hw.uuid`, MAC fallback). Carrier fails to decrypt on any other host, even with the correct password. |
 
@@ -135,12 +136,13 @@ All obfuscation and cryptographic operations run natively in Go. For core format
 
 - **PNG:** Injects a tEXt chunk before the IEND marker. Streams chunk-by-chunk without loading the full carrier into memory.
 - **JPEG:** Constructs a parallel APP1 segment with a valid TIFF/EXIF structure. The payload is stored in the UserComment (0x9286) tag with an undefined charset prefix, making it indistinguishable from camera-vendor encoded comments.
-- **MP3:** Injects a TXXX frame into the ID3v2 tag. Uses a **padding-first optimization** that overwrites existing ID3v2 padding to avoid shifting the audio stream, ensuring bit-perfect audio preservation. Verified by SHA256 comparison in the test suite.
-- **PDF:** Implements a **Native Purge Engine** that parses the full XREF chain and re-emits a clean single-pass PDF. Eliminates incremental update artifacts and ghost data traces common in PDF metadata editors. Falls back to exiftool for PDF 1.5+ compressed XREF streams and encrypted PDFs.
+- **MP3:** Injects a TXXX frame into the ID3v2 tag. Uses a padding-first optimization that overwrites existing ID3v2 padding to avoid shifting the audio stream, ensuring bit-perfect audio preservation. Verified by SHA256 comparison in the test suite.
+- **PDF:** Implements a Native Purge Engine that parses the full XREF chain and re-emits a clean single-pass PDF. Eliminates incremental update artifacts and ghost data traces common in PDF metadata editors. Falls back to exiftool for PDF 1.5+ compressed XREF streams and encrypted PDFs.
+- **Text files (.txt, .md, .html, .htm, .json, .xml, .csv):** Appends payload as invisible Unicode zero-width characters (ZWSP/ZWJ bit encoding with ZWNJ frame markers). Invisible in all renderers and editors. Survives copy-paste. No visual artifact, no binary signature.
 
 ### In-Memory Execution (Linux)
 
-`exec` and `git-reveal --exec` run the payload directly from RAM using `memfd_create` + `execveat(AT_EMPTY_PATH)`. The binary never touches disk. `execveat` with `AT_EMPTY_PATH` executes the file descriptor directly — no `/proc/self/fd/<n>` path string is opened or stored in memory. Supports amd64, arm64, arm32, and mips architectures.
+`exec` and `git-reveal --exec` run the payload directly from RAM using `memfd_create` + `execveat(AT_EMPTY_PATH)`. The binary never touches disk. `execveat` with `AT_EMPTY_PATH` executes the file descriptor directly, no `/proc/self/fd/<n>` path string is opened or stored in memory. Supports amd64, arm64, arm32, and mips architectures.
 
 ### Git Dead Drop
 
@@ -151,19 +153,19 @@ All obfuscation and cryptographic operations run natively in Go. For core format
 | GitHub web UI (branches, files, commits) | No |
 | `git clone` | No (not in default fetch refspec) |
 | `git log` | No |
-| `git ls-remote` | Ref name only — no content |
+| `git ls-remote` | Ref name only, no content |
 
 The blob content is opaque v3 ciphertext. Even if retrieved, it is unreadable without the password.
 
 ### Surgical Wipe
 
-`wipe` removes an embedded payload and restores the carrier to a clean state. Format-aware: PNG drops the tEXt chunk, JPEG strips the APP1 segment, MP3 removes the TXXX frame, PDF purge-rewrites without `/Keywords`. Carrier timestamps are restored after wipe.
+`wipe` removes an embedded payload and restores the carrier to a clean state. Format-aware: PNG drops the tEXt chunk, JPEG strips the APP1 segment, MP3 removes the TXXX frame, PDF purge-rewrites without `/Keywords`, text files strip the invisible char block. Carrier timestamps are restored after wipe.
 
 ### Distributed Resiliency
 
-- **Reed-Solomon `(K, P)`**: payload splits into K data + P parity shards. Any K of K+P carriers recover the original — up to P carriers may be lost or deleted.
-- **CRC64 algebraic beacon**: each carrier has 8 bytes appended such that `CRC64(file) == HMAC-SHA256(password, "nightcloak-beacon-v1")[:8]`. The 8-byte solution is computed in O(64) via the precomputed inverse of the CRC64/ECMA GF(2)-linear map. Parallel scanner (`NumCPU` goroutines) identifies all carriers in a directory tree in a single pass — no filename list, no manifest, no external state.
-- **Self-describing manifests**: each shard carries a 52-byte header with index, shard counts, payload size, and per-payload HMAC identifier. The scanner groups shards from multiple independent split operations in a single directory.
+- **Reed-Solomon (K, P):** payload splits into K data + P parity shards. Any K of K+P carriers recover the original, up to P carriers may be lost or deleted.
+- **CRC64 algebraic beacon:** each carrier has 8 bytes appended such that `CRC64(file) == HMAC-SHA256(password, "nightcloak-beacon-v1")[:8]`. The 8-byte solution is computed in O(64) via the precomputed inverse of the CRC64/ECMA GF(2)-linear map. Parallel scanner (NumCPU goroutines) identifies all carriers in a directory tree in a single pass, no filename list, no manifest, no external state.
+- **Self-describing manifests:** each shard carries a 52-byte header with index, shard counts, payload size, and per-payload HMAC identifier. The scanner groups shards from multiple independent split operations in a single directory.
 
 ---
 
@@ -183,7 +185,7 @@ GOOS=darwin  GOARCH=arm64 CGO_ENABLED=0 go build ./...
 GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build ./...
 ```
 
-### Single-Carrier
+### Single-Carrier (Images, Audio, PDF)
 
 ```bash
 # Hide / reveal
@@ -201,11 +203,30 @@ nightcloak hide photo.jpg "secret" -p mypass --lock
 
 # Double encryption (primary password + secondary key)
 KEY=- nightcloak hide photo.jpg payload.bin -p mypass
-# stderr: [KEY] <base58key>  ← save this
+# stderr: [KEY] <base58key>  <- save this
 KEY="<base58key>" nightcloak reveal photo.jpg -p mypass
 
 # Pipe to stdout
 nightcloak reveal photo.jpg -p mypass | file -
+```
+
+### Text Carriers (Unicode)
+
+Any `.txt`, `.md`, `.html`, `.htm`, `.json`, `.xml`, or `.csv` file works as a carrier. The host text is unchanged and renders normally in all editors, browsers, and terminals.
+
+```bash
+# Hide in a markdown file
+nightcloak hide README.md secret.txt -p mypass
+
+# Reveal
+nightcloak reveal README.md -p mypass
+
+# Wipe (no password required, purely structural)
+nightcloak wipe README.md -p mypass
+
+# Works with any text format
+nightcloak hide config.json payload.bin -p mypass
+nightcloak hide notes.txt "classified" -p mypass
 ```
 
 ### Distributed Ghost Network
@@ -282,7 +303,7 @@ KEY=- nightcloak hide photo.jpg payload.bin
 | `exiftool` | TIFF, encrypted PDF, PDF 1.5+ compressed XREF (optional) | `brew install exiftool` / `apt install libimage-exiftool-perl` |
 | `ffmpeg` | AVI, OGG containers (optional) | `brew install ffmpeg` / `apt install ffmpeg` |
 
-Core formats (PNG, JPEG, MP3, PDF flat XREF) and the full distributed pipeline require no external tools on any platform.
+Core formats (PNG, JPEG, MP3, PDF flat XREF, all text formats) and the full distributed pipeline require no external tools on any platform.
 
 ---
 
