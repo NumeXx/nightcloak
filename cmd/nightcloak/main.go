@@ -509,8 +509,8 @@ func cmdSplit(args []string) {
 		distributed, total, minRequired)
 }
 
-// appendBeaconAlignment reads the carrier file at path, computes the 8-byte
-// forced-match suffix, and appends it so that crc64(file) == beacon target.
+/* appendBeaconAlignment reads the carrier file at path, computes the 8-byte
+forced-match suffix, and appends it so that crc64(file) == beacon target. */
 func appendBeaconAlignment(path, password string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -529,9 +529,11 @@ func appendBeaconAlignment(path, password string) error {
 	return err
 }
 
-// findCarriersInDir collects exactly n distinct carrier files from dir.
-// All candidates are shuffled and the first n are returned — no quartile
-// restriction, since every slot needs a unique file.
+/*
+findCarriersInDir collects exactly n distinct carrier files from dir.
+All candidates are shuffled and the first n are returned, no quartile
+restriction since every slot needs a unique file.
+*/
 func findCarriersInDir(dir string, n int) ([]string, error) {
 	var candidates []string
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
@@ -879,10 +881,12 @@ type carrierCandidate struct {
 	mtime time.Time
 }
 
-// findCarrier walks the current directory tree and returns a carrier file
-// from the 2nd or 3rd quartile of the mtime distribution (files that are
-// old enough to be unremarkable but not so old as to stand out as artifacts).
-// Falls back to a random pick if fewer than 4 candidates exist.
+/*
+findCarrier walks the current directory tree and returns a carrier file
+from the 2nd or 3rd quartile of the mtime distribution (old enough to be
+unremarkable but not so old as to stand out as artifacts). Falls back to a
+random pick if fewer than 4 candidates exist.
+*/
 func findCarrier() (string, error) {
 	var candidates []carrierCandidate
 
@@ -933,10 +937,12 @@ func findCarrier() (string, error) {
 // password resolution
 // ---------------------------------------------------------------------------
 
-// resolvePassword returns the password from, in priority order:
-//  1. The explicit flag value (-p / --password)
-//  2. The NIGHT_PASSWORD environment variable
-//  3. An interactive terminal prompt
+/*
+resolvePassword returns the password from, in priority order:
+ 1. The explicit flag value (-p / --password)
+ 2. The NIGHT_PASSWORD environment variable
+ 3. An interactive terminal prompt
+*/
 func resolvePassword(explicit string) string {
 	if explicit != "" {
 		return explicit

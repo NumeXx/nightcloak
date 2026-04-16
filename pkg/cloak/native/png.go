@@ -1,8 +1,10 @@
-// Package native provides zero-dependency metadata injection for common
-// image formats. No external tools (exiftool, ffmpeg) are required.
-//
-// PNG support: injects and extracts payloads via tEXt chunks using a
-// streaming architecture that never loads the full carrier into memory.
+/*
+Package native provides zero-dependency metadata injection for common
+image formats. No external tools (exiftool, ffmpeg) are required.
+
+PNG: injects payloads via tEXt chunks. Streaming, never loads the full
+carrier into memory.
+*/
 package native
 
 import (

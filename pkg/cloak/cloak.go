@@ -1,11 +1,10 @@
-// Package cloak embeds and extracts encrypted payloads in file metadata.
-//
-// It uses exiftool (for images, PDFs, and general files) and ffmpeg
-// (for audio/video containers) to write payloads into the Description
-// metadata tag, following Jiab77's original wire format.
-//
-// The streaming architecture avoids ARG_MAX limits by piping data into
-// tool stdin rather than passing it as CLI arguments.
+/*
+Package cloak embeds and extracts encrypted payloads in file metadata.
+
+Uses exiftool (images, PDFs, general files) and ffmpeg (audio/video) to
+write payloads into the Description tag, following Jiab77's original wire
+format. Streaming via stdin avoids ARG_MAX limits on large payloads.
+*/
 package cloak
 
 import (
@@ -27,8 +26,8 @@ import (
 )
 
 const (
-	// TagLine is the sentinel written to the Comment tag to mark
-	// files that contain cloak payloads.
+	/* TagLine is the sentinel written to the Comment tag to mark
+	files that contain cloak payloads. */
 	TagLine = "Modified by Cloak"
 
 	// defaultTimeout for external tool execution.
@@ -50,8 +49,8 @@ type HideOpts struct {
 	// CarrierPath is the source media file to embed data into.
 	CarrierPath string
 
-	// OutputPath is where the modified file is written. If empty,
-	// the carrier is replaced in-place (like cloak.sh's default).
+	/* OutputPath is where the modified file is written. If empty,
+	the carrier is replaced in-place (like cloak.sh's default). */
 	OutputPath string
 
 	// Payload is the raw data to embed (already encrypted by the caller).
@@ -63,8 +62,8 @@ type HideOpts struct {
 	// Type selects the tag format: PayloadString ("S:") or PayloadFile ("N:;F:").
 	Type PayloadType
 
-	// Password is used by native injectors to derive a sentinel for
-	// payload identification. Ignored by the exiftool/ffmpeg paths.
+	/* Password is used by native injectors to derive a sentinel for
+	payload identification. Ignored by the exiftool/ffmpeg paths. */
 	Password string
 
 	// Timeout overrides the default execution timeout. Zero means default.
@@ -94,11 +93,13 @@ var textExtensions = map[string]bool{
 	".json": true, ".xml": true, ".csv": true,
 }
 
-// Hide embeds a payload into the carrier file's metadata tags.
-//
-// Routing: .png, .jpg/.jpeg, .mp3, and .pdf use native Go injectors (zero
-// external deps). .avi/.ogg files use ffmpeg with FFMETADATA1. All other
-// files use exiftool with the streaming -@ - pattern.
+/*
+Hide embeds a payload into the carrier file's metadata tags.
+
+Routing: .png/.jpg/.mp3/.pdf use native Go injectors (zero external deps).
+.avi/.ogg use ffmpeg via FFMETADATA1. Everything else uses exiftool with the
+streaming -@ - pattern.
+*/
 func Hide(opts HideOpts) error {
 	if err := validateHideOpts(opts); err != nil {
 		return err
@@ -157,11 +158,13 @@ func Hide(opts HideOpts) error {
 
 	return nil
 }
-// Wipe removes the nightcloak payload from a carrier file, restoring it to
-// a clean state. Timestamps are restored after the operation.
-//
-// Routing mirrors Hide: native paths for PNG, JPEG, MP3, PDF. Exiftool for
-// everything else.
+/*
+Wipe removes the nightcloak payload from a carrier file, restoring it to
+a clean state. Timestamps are restored after the operation.
+
+Routing mirrors Hide: native paths for PNG, JPEG, MP3, PDF. Exiftool for
+everything else.
+*/
 func Wipe(carrierPath, password string) error {
 	if _, err := os.Stat(carrierPath); err != nil {
 		return fmt.Errorf("carrier file: %w", err)
@@ -267,10 +270,12 @@ func wipeEX(carrierPath string) error {
 	return nil
 }
 
-// Reveal extracts the payload from a carrier file's metadata.
-//
-// Routing: .png, .jpg/.jpeg, .mp3, and .pdf use native Go extractors.
-// All other files use exiftool.
+/*
+Reveal extracts the payload from a carrier file's metadata.
+
+Routing: .png/.jpg/.mp3/.pdf use native Go extractors. All other files use
+exiftool.
+*/
 func Reveal(carrierPath string, password string) (*RevealResult, error) {
 	ext := strings.ToLower(filepath.Ext(carrierPath))
 	switch {
@@ -289,13 +294,14 @@ func Reveal(carrierPath string, password string) (*RevealResult, error) {
 	}
 }
 
-// RevealReader extracts a payload from content that is already loaded in
-// memory. ext must be the lowercase file extension including the dot
-// (e.g. ".jpg"). This avoids a second disk read when the caller (e.g.
-// cmdGather) already holds the file bytes from a prior scan.
-//
-// For formats routed to exiftool the content is written to a temp file;
-// native paths stream directly from a bytes.Reader.
+/*
+RevealReader extracts a payload from content already loaded in memory. ext
+is the lowercase file extension including the dot (e.g. ".jpg"). Avoids a
+second disk read when the caller (e.g. cmdGather) already holds the bytes.
+
+For formats routed to exiftool, content is written to a temp file. Native
+paths stream directly from a bytes.Reader.
+*/
 func RevealReader(content []byte, ext, password string) (*RevealResult, error) {
 	r := bytes.NewReader(content)
 	switch {
@@ -342,8 +348,8 @@ func RevealReader(content []byte, ext, password string) (*RevealResult, error) {
 	}
 }
 
-// revealExFromContent writes content to a temp file and runs exiftool on it.
-// Used by RevealReader for formats not handled natively.
+/* revealExFromContent writes content to a temp file and runs exiftool on it.
+Used by RevealReader for formats not handled natively. */
 func revealExFromContent(content []byte, ext string) (*RevealResult, error) {
 	tmp, err := os.CreateTemp("", "nightcloak-reveal-*"+ext)
 	if err != nil {
@@ -649,15 +655,16 @@ func buildWirePayload(opts HideOpts) []byte {
 // exiftool path: streaming via -@ -
 // ---------------------------------------------------------------------------
 
-// hideEX writes tags to exiftool's stdin using the -@ - flag.
-//
-// The pipe goroutine writes two lines:
-//
-//	-comment=Modified by Cloak
-//	-description=N:<b64name>;F:<payload>    (or S:<payload>)
-//
-// exiftool reads these as if they were CLI arguments, but from stdin
-// there is no ARG_MAX limit on the payload size.
+/*
+hideEX writes tags to exiftool's stdin using the -@ - flag.
+
+The pipe goroutine writes two lines:
+  -comment=Modified by Cloak
+  -description=N:<b64name>;F:<payload>    (or S:<payload>)
+
+exiftool reads these as CLI arguments from stdin, so no ARG_MAX limit
+applies regardless of payload size.
+*/
 func hideEX(opts HideOpts) error {
 	ctx, cancel := contextWithTimeout(opts.Timeout)
 	defer cancel()

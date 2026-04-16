@@ -8,10 +8,11 @@ import (
 	"strings"
 )
 
-// machineID returns a stable identifier for the current machine.
-// Tries /etc/machine-id (Linux), hw.uuid via sysctl (macOS),
-// then the first non-loopback hardware MAC address.
-// Returns an empty string if all methods fail.
+/*
+machineID returns a stable identifier for the current machine.
+Tries /etc/machine-id (Linux), hw.uuid via sysctl (macOS), then the
+first non-loopback hardware MAC address. Returns "" if all methods fail.
+*/
 func machineID() string {
 	if id := readMachineIDFile(); id != "" {
 		return id

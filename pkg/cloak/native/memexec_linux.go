@@ -60,9 +60,11 @@ func execveatSyscall() uintptr {
 	}
 }
 
-// MemExec executes a binary payload directly from memory.
-// The binary never touches disk. Uses memfd_create + execveat(AT_EMPTY_PATH)
-// so no /proc path string is opened or stored in memory.
+/*
+MemExec executes a binary payload directly from memory. The binary never
+touches disk. Uses memfd_create + execveat(AT_EMPTY_PATH) so no /proc path
+string is opened or stored in memory.
+*/
 func MemExec(payload []byte, args []string) error {
 	// 1. Create anonymous RAM file descriptor.
 	// Flag 0: no MFD_CLOEXEC, fd must stay open until execveat replaces the process.

@@ -9,9 +9,11 @@ import (
 	"io"
 )
 
-// PNGWipe streams a PNG from r to w, removing the nightcloak tEXt chunk
-// identified by the password-derived sentinel. All other chunks pass through
-// verbatim. Returns an error if no matching payload is found.
+/*
+PNGWipe streams a PNG from r to w, removing the nightcloak tEXt chunk
+identified by the password-derived sentinel. All other chunks pass through
+verbatim. Returns an error if no matching payload is found.
+*/
 func PNGWipe(r io.Reader, w io.Writer, password string) error {
 	sig := make([]byte, 8)
 	if _, err := io.ReadFull(r, sig); err != nil {
@@ -92,9 +94,11 @@ func PNGWipe(r io.Reader, w io.Writer, password string) error {
 	}
 }
 
-// JPEGExifWipe streams a JPEG from r to w, removing any APP1/EXIF segment
-// whose UserComment sentinel matches the given password. All other segments
-// pass through verbatim.
+/*
+JPEGExifWipe streams a JPEG from r to w, removing any APP1/EXIF segment
+whose UserComment sentinel matches the given password. All other segments
+pass through verbatim.
+*/
 func JPEGExifWipe(r io.Reader, w io.Writer, password string) error {
 	var soi [2]byte
 	if _, err := io.ReadFull(r, soi[:]); err != nil {
@@ -175,8 +179,8 @@ func JPEGExifWipe(r io.Reader, w io.Writer, password string) error {
 	}
 }
 
-// MP3Wipe removes the nightcloak TXXX:ENCODEDBY frame from the ID3v2 tag
-// and streams the audio data through unchanged.
+/* MP3Wipe removes the nightcloak TXXX:ENCODEDBY frame from the ID3v2 tag
+and streams the audio data through unchanged. */
 func MP3Wipe(r io.Reader, w io.Writer, password string) error {
 	header := make([]byte, id3HeaderSize)
 	if _, err := io.ReadFull(r, header); err != nil {
@@ -239,8 +243,8 @@ func MP3Wipe(r io.Reader, w io.Writer, password string) error {
 	return err
 }
 
-// PDFWipe re-emits a clean purged PDF with the /Keywords field removed from
-// the /Info dictionary, erasing the nightcloak payload entirely.
+/* PDFWipe re-emits a clean purged PDF with the /Keywords field removed from
+the /Info dictionary, erasing the nightcloak payload entirely. */
 func PDFWipe(r io.Reader, w io.Writer) error {
 	data, err := io.ReadAll(r)
 	if err != nil {
@@ -284,8 +288,8 @@ func PDFWipe(r io.Reader, w io.Writer) error {
 	return writePurgedPDF(w, data, objects, trailer)
 }
 
-// removeDictKey returns a copy of objBytes with key stripped from the first
-// dict. If the key is not found, objBytes is returned unchanged.
+/* removeDictKey returns a copy of objBytes with key stripped from the first
+dict. If the key is not found, objBytes is returned unchanged. */
 func removeDictKey(objBytes []byte, key string) []byte {
 	dictStart := bytes.Index(objBytes, []byte("<<"))
 	if dictStart < 0 {

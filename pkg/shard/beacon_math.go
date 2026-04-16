@@ -1,14 +1,16 @@
-// Package shard implements the CRC64 algebraic primitives for the
-// NightCloak stateless beacon discovery system.
-//
-// Core insight: CRC64/ECMA is a GF(2)-linear map over its input data.
-// This means the map L: P → rawCRC64(0, P) for an 8-byte input P is a
-// bijection on GF(2)^64. Its inverse M^{-1} (precomputed at init) lets us
-// find the unique 8-byte appendage that forces any file's CRC64 to a
-// predetermined target value derived from the master secret.
-//
-// Reference: Stigge, Plötz, Müller, Redlich — "Reversing CRC — Theory and
-// Practice." HU Berlin, SAR-PR-2006-05.
+/*
+Package shard implements CRC64 algebraic primitives for the NightCloak
+stateless beacon discovery system.
+
+Core insight: CRC64/ECMA is a GF(2)-linear map over its input data.
+The map L: P -> rawCRC64(0, P) for an 8-byte input P is a bijection on
+GF(2)^64. Its inverse M^{-1} (precomputed at init) lets us find the unique
+8-byte appendage that forces any file's CRC64 to a predetermined target
+derived from the master secret.
+
+Reference: Stigge, Plotz, Muller, Redlich, "Reversing CRC: Theory and
+Practice." HU Berlin, SAR-PR-2006-05.
+*/
 package shard
 
 import (
@@ -23,12 +25,14 @@ var ecmaTable = crc64.MakeTable(crc64.ECMA)
 // Raw CRC64 (no initial/final XOR)
 // ---------------------------------------------------------------------------
 
-// rawCRC64 runs the CRC64/ECMA update loop starting from state, processing
-// each byte as: state = table[byte(state)^b] ^ (state >> 8).
-//
-// Unlike crc64.Checksum, this does NOT apply the initial ^state or final
-// ^state inversion that Go's implementation adds. It is the bare GF(2)
-// polynomial step used for all algebraic derivations below.
+/*
+rawCRC64 runs the CRC64/ECMA update loop starting from state, processing
+each byte as: state = table[byte(state)^b] ^ (state >> 8).
+
+Unlike crc64.Checksum, this does NOT apply the initial ^state or final
+^state inversion that Go's implementation adds. It is the bare GF(2)
+polynomial step used for all algebraic derivations below.
+*/
 func rawCRC64(state uint64, data []byte) uint64 {
 	for _, b := range data {
 		state = ecmaTable[byte(state)^b] ^ (state >> 8)
@@ -40,16 +44,16 @@ func rawCRC64(state uint64, data []byte) uint64 {
 // Public API
 // ---------------------------------------------------------------------------
 
-// FindPadding returns the unique 8-byte sequence P such that:
-//
-//	crc64.Checksum(append(data, P[:]...), ecmaTable) == targetCRC
-//
-// given currentCRC = crc64.Checksum(data, ecmaTable).
-//
-// Algorithm: CRC64 over exactly 8 bytes is a GF(2)-linear bijection on
-// {0,1}^64. We precompute its 64×64 GF(2) inverse matrix M^{-1} at init
-// time and apply it here in O(64) — a single matrix-vector product.
-// No search, no approximation, no allocation.
+/*
+FindPadding returns the unique 8-byte sequence P such that:
+  crc64.Checksum(append(data, P[:]...), ecmaTable) == targetCRC
+
+given currentCRC = crc64.Checksum(data, ecmaTable).
+
+CRC64 over exactly 8 bytes is a GF(2)-linear bijection on {0,1}^64.
+The precomputed 64x64 GF(2) inverse matrix M^{-1} is applied in O(64),
+a single matrix-vector product. No search, no approximation, no allocation.
+*/
 func FindPadding(currentCRC, targetCRC uint64) [8]byte {
 	// Go's crc64.Checksum convention:
 	//   Checksum(D) = ^rawCRC64(^0, D)
@@ -73,14 +77,16 @@ func FindPadding(currentCRC, targetCRC uint64) [8]byte {
 	return out
 }
 
-// CombineCRC64 returns the CRC64 of the concatenation A||B given the
-// individual checksums and the byte length of B.
-//
-//	CombineCRC64(crc64.Checksum(a, t), crc64.Checksum(b, t), int64(len(b)))
-//	  == crc64.Checksum(append(a, b...), t)
-//
-// Uses O(64·log(len2)) GF(2) matrix squaring — O(1) in practice since
-// len2 is bounded by 63 squaring steps for any 64-bit length.
+/*
+CombineCRC64 returns the CRC64 of the concatenation A||B given the
+individual checksums and the byte length of B.
+
+  CombineCRC64(crc64.Checksum(a, t), crc64.Checksum(b, t), int64(len(b)))
+    == crc64.Checksum(append(a, b...), t)
+
+Uses O(64*log(len2)) GF(2) matrix squaring, O(1) in practice since len2
+is bounded by 63 squaring steps for any 64-bit length.
+*/
 func CombineCRC64(crc1, crc2 uint64, len2 int64) uint64 {
 	// rawCRC64(^crc1, B) = rawCRC64(^crc1, zeros(len2)) XOR rawCRC64(0, B)
 	//
@@ -106,11 +112,12 @@ func init() {
 	crc64InvMatrix = invertGF2Matrix(buildCRC64ForwardMatrix())
 }
 
-// buildCRC64ForwardMatrix builds the 64×64 GF(2) matrix of the map
-// L: P → rawCRC64(0, P) where P is 8 bytes packed as a little-endian uint64.
-//
-// Column j is L(e_j) where e_j has only bit j set. We transpose into
-// row-major form for efficient gf2MatVec application.
+/*
+buildCRC64ForwardMatrix builds the 64x64 GF(2) matrix of the map
+L: P -> rawCRC64(0, P) where P is 8 bytes packed as a little-endian uint64.
+Column j is L(e_j) where e_j has only bit j set. Transposed into row-major
+form for efficient gf2MatVec application.
+*/
 func buildCRC64ForwardMatrix() [64]uint64 {
 	var M [64]uint64 // M[i] = row i as a bitmask over 64 columns
 	var buf [8]byte
@@ -127,8 +134,8 @@ func buildCRC64ForwardMatrix() [64]uint64 {
 	return M
 }
 
-// invertGF2Matrix inverts a 64×64 GF(2) matrix via Gauss-Jordan elimination.
-// Panics on singular input — impossible for a valid CRC64 polynomial.
+/* invertGF2Matrix inverts a 64x64 GF(2) matrix via Gauss-Jordan elimination.
+Panics on singular input, which is impossible for a valid CRC64 polynomial. */
 func invertGF2Matrix(M [64]uint64) [64]uint64 {
 	var a, inv [64]uint64
 	copy(a[:], M[:])
@@ -177,8 +184,8 @@ func gf2MatVec(M [64]uint64, v uint64) uint64 {
 // Matrix squaring for CombineCRC64
 // ---------------------------------------------------------------------------
 
-// shiftState returns rawCRC64(state, zeros(n)) using binary exponentiation
-// of the single-zero-byte transformation matrix. O(64·log n).
+/* shiftState returns rawCRC64(state, zeros(n)) using binary exponentiation
+of the single-zero-byte transformation matrix. O(64*log n). */
 func shiftState(state uint64, n int64) uint64 {
 	if n == 0 {
 		return state
@@ -186,8 +193,8 @@ func shiftState(state uint64, n int64) uint64 {
 	return gf2MatVec(buildShiftMatrix(n), state)
 }
 
-// buildShiftMatrix returns the GF(2) matrix for "process n zero bytes",
-// computed as M1^n via repeated squaring of the one-byte matrix M1.
+/* buildShiftMatrix returns the GF(2) matrix for "process n zero bytes",
+computed as M1^n via repeated squaring of the one-byte matrix M1. */
 func buildShiftMatrix(n int64) [64]uint64 {
 	result := identityMatrix()
 	base := oneByteZeroMatrix()
@@ -201,15 +208,17 @@ func buildShiftMatrix(n int64) [64]uint64 {
 	return result
 }
 
-// oneByteZeroMatrix returns the 64×64 GF(2) matrix M1 such that
-// M1·state = rawCRC64(state, [0x00]).
-//
-// For byte = 0: state' = table[state & 0xFF] ^ (state >> 8).
-// By CRC linearity (table[a^b] = table[a]^table[b], table[0]=0):
-//   state' = table[state & 0xFF] ^ (state >> 8)
-// Column j of M1:
-//   j < 8:  table[1<<j]          (low byte bit, zero upper contribution)
-//   j >= 8: 1 << (j-8)           (upper bits just shift right by 8)
+/*
+oneByteZeroMatrix returns the 64x64 GF(2) matrix M1 such that
+M1*state = rawCRC64(state, [0x00]).
+
+For byte = 0: state' = table[state & 0xFF] ^ (state >> 8).
+By CRC linearity (table[a^b] = table[a]^table[b], table[0]=0):
+  state' = table[state & 0xFF] ^ (state >> 8)
+Column j of M1:
+  j < 8:  table[1<<j]   (low byte bit, zero upper contribution)
+  j >= 8: 1 << (j-8)    (upper bits just shift right by 8)
+*/
 func oneByteZeroMatrix() [64]uint64 {
 	var M [64]uint64
 	for j := 0; j < 64; j++ {
@@ -236,8 +245,8 @@ func identityMatrix() [64]uint64 {
 	return m
 }
 
-// mulGF2Matrices multiplies two 64×64 GF(2) matrices.
-// Transposes B first for cache-local row·row dot products.
+/* mulGF2Matrices multiplies two 64x64 GF(2) matrices.
+Transposes B first for cache-local row*row dot products. */
 func mulGF2Matrices(A, B [64]uint64) [64]uint64 {
 	var Bt [64]uint64
 	for i := 0; i < 64; i++ {

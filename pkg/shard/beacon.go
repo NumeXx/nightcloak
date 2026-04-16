@@ -24,9 +24,9 @@ import (
 	"sync"
 )
 
-// DeriveBtarget derives the 64-bit CRC64 beacon target from the master
-// password using HMAC-SHA256. All carrier files in a shard set are forced
-// to this checksum value via AlignBeacon.
+/* DeriveBtarget derives the 64-bit CRC64 beacon target from the master
+password using HMAC-SHA256. All carriers in a shard set are forced to this
+checksum value via AlignBeacon. */
 func DeriveBtarget(password string) uint64 {
 	mac := hmac.New(sha256.New, []byte(password))
 	mac.Write([]byte("nightcloak-beacon-v1"))
@@ -34,9 +34,11 @@ func DeriveBtarget(password string) uint64 {
 	return binary.BigEndian.Uint64(h[:8])
 }
 
-// AlignBeacon returns data with a unique 8-byte suffix appended such that
-// crc64.Checksum(result, ecmaTable) == DeriveBtarget(password).
-// The operation is deterministic: same data + same password → same suffix.
+/*
+AlignBeacon returns data with a unique 8-byte suffix appended such that
+crc64.Checksum(result, ecmaTable) == DeriveBtarget(password).
+Deterministic: same data + same password always produces the same suffix.
+*/
 func AlignBeacon(data []byte, password string) []byte {
 	current := crc64.Checksum(data, ecmaTable)
 	target := DeriveBtarget(password)
@@ -47,8 +49,8 @@ func AlignBeacon(data []byte, password string) []byte {
 	return out
 }
 
-// VerifyBeacon reports whether crc64.Checksum(data) matches the beacon
-// derived from password.
+/* VerifyBeacon reports whether crc64.Checksum(data) matches the beacon
+derived from password. */
 func VerifyBeacon(data []byte, password string) bool {
 	return crc64.Checksum(data, ecmaTable) == DeriveBtarget(password)
 }
@@ -59,11 +61,13 @@ type ScanResult struct {
 	Content []byte
 }
 
-// Scan walks root recursively and returns every regular file whose CRC64
-// checksum matches the beacon for the given password.
-//
-// Files are processed by a goroutine pool bounded by runtime.NumCPU() to
-// avoid file descriptor exhaustion. The order of results is not guaranteed.
+/*
+Scan walks root recursively and returns every regular file whose CRC64
+checksum matches the beacon for the given password.
+
+Processed by a goroutine pool bounded by runtime.NumCPU() to avoid file
+descriptor exhaustion. Result order is not guaranteed.
+*/
 func Scan(root, password string) ([]ScanResult, error) {
 	target := DeriveBtarget(password)
 

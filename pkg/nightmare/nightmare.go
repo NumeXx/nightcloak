@@ -5,21 +5,24 @@ import (
 	"fmt"
 )
 
-// Nightmarify obfuscates a string through the nightmare chain:
-//
-//	input → hex encode → Base82 encode (Base64 + ROT13/5)
-//
-// The result looks like Base64 but fails every Base64 decoder — the
-// "nightmare" is that an analyst sees familiar-looking encoding but
-// cannot decode it with any standard tool.
+/*
+Nightmarify obfuscates a string through the nightmare chain:
+
+  input -> hex encode -> Base82 encode (Base64 + ROT13/5)
+
+The result looks like Base64 but fails every Base64 decoder. An analyst
+sees familiar-looking encoding but cannot decode it with any standard tool.
+*/
 func Nightmarify(input string) string {
 	hexStr := hex.EncodeToString([]byte(input))
 	return Base82Encode([]byte(hexStr))
 }
 
-// Dreamify reverses the nightmare chain:
-//
-//	input → Base82 decode → hex decode → original string
+/*
+Dreamify reverses the nightmare chain:
+
+  input -> Base82 decode -> hex decode -> original string
+*/
 func Dreamify(input string) (string, error) {
 	hexBytes, err := Base82Decode(input)
 	if err != nil {

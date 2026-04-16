@@ -76,9 +76,11 @@ func XDecrypt(ciphertext, key []byte) ([]byte, error) {
 	return plaintext, nil
 }
 
-// ResolveXKey reads the KEY environment variable and returns a 32-byte key,
-// or nil if KEY is not set. If KEY="-", a random key is generated and its
-// Base58 encoding is printed to stderr before being returned.
+/*
+ResolveXKey reads the KEY environment variable and returns a 32-byte key,
+or nil if KEY is not set. If KEY="-", a random key is generated and its
+Base58 encoding is printed to stderr before being returned.
+*/
 func ResolveXKey() ([]byte, error) {
 	keyStr := os.Getenv("KEY")
 	if keyStr == "" {
@@ -87,20 +89,19 @@ func ResolveXKey() ([]byte, error) {
 
 	// Generate random key mode.
 	if keyStr == "-" {
-	        // Generate 12 random bytes (~16 characters in Base58).
-	        // This provides 96 bits of seed entropy, which is then 
-	        // expanded to a 256-bit key via SHA-256.
-	        seed := make([]byte, 12)
-	        if _, err := io.ReadFull(rand.Reader, seed); err != nil {
-	                return nil, fmt.Errorf("generating random seed: %w", err)
-	        }
+		/* Generate 12 random bytes (~16 chars in Base58), then expand
+		to a 256-bit key via SHA-256. Gives 96 bits of seed entropy. */
+		seed := make([]byte, 12)
+		if _, err := io.ReadFull(rand.Reader, seed); err != nil {
+			return nil, fmt.Errorf("generating random seed: %w", err)
+		}
 
-	        display := Base58Encode(seed)
-	        fmt.Fprintf(os.Stderr, "  [KEY] %s\n", display)
+		display := Base58Encode(seed)
+		fmt.Fprintf(os.Stderr, "  [KEY] %s\n", display)
 
-	        // The actual key used is the hash of the displayed string.
-	        h := sha256.Sum256([]byte(display))
-	        return h[:], nil
+		// key is the hash of the displayed string
+		h := sha256.Sum256([]byte(display))
+		return h[:], nil
 	}
 	// Try Base58 decode first.
 	decoded, err := Base58Decode(keyStr)

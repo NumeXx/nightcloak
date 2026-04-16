@@ -14,8 +14,8 @@ type FileTimes struct {
 	ModTime    time.Time
 }
 
-// GetFileTimes captures the mtime of path. Windows does not expose atime
-// without CGO, so AccessTime falls back to ModTime.
+/* GetFileTimes captures the mtime of path. Windows does not expose atime
+without CGO, so AccessTime falls back to ModTime. */
 func GetFileTimes(path string) (FileTimes, error) {
 	fi, err := os.Stat(path)
 	if err != nil {

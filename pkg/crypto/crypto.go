@@ -58,27 +58,27 @@ const (
 	argon2Threads = 4
 )
 
-// Wire formats:
-//
-// v3 (Argon2id + optional compression + machine lock + random padding, current):
-//
-//	[4B magic][1B flags][16B salt][12B nonce][N bytes CIPHERTEXT+POLY1305_TAG]
-//	flags bit0=compressed, bit1=locked
-//	plaintext layout: [2B pad_len big-endian][pad bytes][data]
-//	data = DEFLATE(plaintext) if compressed, else plaintext
-//
-// v2 (Argon2id):
-//
-//	[4B magic][16B salt][12B nonce][N bytes CIPHERTEXT+POLY1305_TAG]
-//
-// v1 (PBKDF2, legacy, read-only):
-//
-//	[12B salt][12B nonce][N bytes CIPHERTEXT+POLY1305_TAG]
+/*
+Wire formats:
 
-// Encrypt authenticates and encrypts plaintext using ChaCha20-Poly1305.
-//
-// Key derivation: Argon2id with a random 16-byte salt (v2 wire format).
-// Each call generates a fresh salt and nonce.
+v3 (Argon2id + optional compression + machine lock + random padding, current):
+  [4B magic][1B flags][16B salt][12B nonce][N bytes CIPHERTEXT+POLY1305_TAG]
+  flags bit0=compressed, bit1=locked
+  plaintext layout: [2B pad_len big-endian][pad bytes][data]
+  data = DEFLATE(plaintext) if compressed, else plaintext
+
+v2 (Argon2id):
+  [4B magic][16B salt][12B nonce][N bytes CIPHERTEXT+POLY1305_TAG]
+
+v1 (PBKDF2, legacy, read-only):
+  [12B salt][12B nonce][N bytes CIPHERTEXT+POLY1305_TAG]
+*/
+
+/*
+Encrypt authenticates and encrypts plaintext using ChaCha20-Poly1305.
+Key derivation: Argon2id with a random 16-byte salt (v2 wire format).
+Each call generates a fresh salt and nonce.
+*/
 func Encrypt(plaintext []byte, password string) ([]byte, error) {
 	salt := make([]byte, v2SaltSize)
 	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
@@ -104,8 +104,8 @@ func Encrypt(plaintext []byte, password string) ([]byte, error) {
 	return out, nil
 }
 
-// Decrypt verifies and decrypts ciphertext produced by Encrypt or EncryptV3.
-// Accepts v3 (Argon2id + compression + padding), v2 (Argon2id), and v1 (PBKDF2 legacy).
+/* Decrypt verifies and decrypts ciphertext produced by Encrypt or EncryptV3.
+Accepts v3 (Argon2id + compression + padding), v2 (Argon2id), and v1 (PBKDF2 legacy). */
 func Decrypt(ciphertext []byte, password string) ([]byte, error) {
 	if isV3(ciphertext) {
 		return decryptV3(ciphertext, password)
@@ -192,14 +192,14 @@ func newPBKDF2AEAD(password string, salt []byte) (cipher.AEAD, error) {
 	return aead, nil
 }
 
-// EncryptV3 encrypts plaintext using the v3 wire format.
-//
-// v3 always includes random padding (0-maxPadding bytes) to vary ciphertext
-// size and defeat size-based carrier anomaly detection.
-// If compress is true, DEFLATE compression is applied before padding; it is
-// only activated when it actually reduces the data size.
-// If lock is true, the key is bound to the current machine's hardware identity
-// so the blob cannot be decrypted on a different host.
+/*
+EncryptV3 encrypts plaintext using the v3 wire format.
+
+Always includes random padding (0-maxPadding bytes) to vary ciphertext size
+and defeat size-based carrier anomaly detection. compress applies DEFLATE
+before padding, only if it actually reduces size. lock binds the key to the
+current machine's hardware identity so the blob cannot be decrypted elsewhere.
+*/
 func EncryptV3(plaintext []byte, password string, compress, lock bool) ([]byte, error) {
 	// Optional compression — only applied when it reduces size.
 	data := plaintext

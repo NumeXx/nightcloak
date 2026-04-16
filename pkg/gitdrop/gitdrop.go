@@ -42,8 +42,8 @@ type Client struct {
 	http               *http.Client
 }
 
-// NewClient parses a GitHub repo URL and returns a ready Client.
-// Accepts: https://github.com/owner/repo, github.com/owner/repo, owner/repo
+/* NewClient parses a GitHub repo URL and returns a ready Client.
+Accepts: https://github.com/owner/repo, github.com/owner/repo, owner/repo */
 func NewClient(repoURL, token string) (*Client, error) {
 	owner, repo, err := parseRepoURL(repoURL)
 	if err != nil {
@@ -69,8 +69,8 @@ func parseRepoURL(u string) (owner, repo string, err error) {
 	return parts[0], parts[1], nil
 }
 
-// Hide stores ciphertext as an orphan git commit under ref.
-// Flow: blob → tree → orphan commit → ref (create or force-update).
+/* Hide stores ciphertext as an orphan git commit under ref.
+Flow: blob -> tree -> orphan commit -> ref (create or force-update). */
 func (c *Client) Hide(ciphertext []byte, ref string) error {
 	blobSHA, err := c.createBlob(ciphertext)
 	if err != nil {
@@ -90,8 +90,8 @@ func (c *Client) Hide(ciphertext []byte, ref string) error {
 	return nil
 }
 
-// Reveal fetches and returns the ciphertext stored at ref.
-// Flow: ref → commit SHA → tree SHA → blob SHA → raw bytes.
+/* Reveal fetches and returns the ciphertext stored at ref.
+Flow: ref -> commit SHA -> tree SHA -> blob SHA -> raw bytes. */
 func (c *Client) Reveal(ref string) ([]byte, error) {
 	commitSHA, err := c.getRef(ref)
 	if err != nil {

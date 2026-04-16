@@ -68,8 +68,8 @@ func encodeManifest(m Manifest) []byte {
 	return b
 }
 
-// DecodeManifest parses a manifest from the first ManifestSize bytes of b.
-// Exported so callers can inspect shard metadata without calling Join.
+/* DecodeManifest parses a manifest from the first ManifestSize bytes of b.
+Exported so callers can inspect shard metadata without calling Join. */
 func DecodeManifest(b []byte) (Manifest, error) {
 	if len(b) < ManifestSize {
 		return Manifest{}, fmt.Errorf("need %d bytes for manifest, got %d", ManifestSize, len(b))
@@ -89,8 +89,8 @@ func DecodeManifest(b []byte) (Manifest, error) {
 	return m, nil
 }
 
-// derivePayloadID computes the per-payload identifier embedded in each manifest.
-// Unique per (password, payload) pair — allows grouping without exposing the password.
+/* derivePayloadID computes the per-payload identifier embedded in each manifest.
+Unique per (password, payload) pair, allows grouping without exposing the password. */
 func derivePayloadID(password string, payload []byte) [32]byte {
 	payloadHash := sha256.Sum256(payload)
 	mac := hmac.New(sha256.New, []byte(password))
@@ -101,10 +101,11 @@ func derivePayloadID(password string, payload []byte) [32]byte {
 	return id
 }
 
-// Split encodes payload into K data shards + P parity shards using
-// Reed-Solomon. Returns K+P byte slices, each prefixed by a 52-byte manifest.
-//
-// Any K slices are sufficient to reconstruct the original payload via Join.
+/*
+Split encodes payload into K data shards + P parity shards using Reed-Solomon.
+Returns K+P byte slices, each prefixed by a 52-byte manifest.
+Any K slices are sufficient to reconstruct the original payload via Join.
+*/
 func Split(payload []byte, dataShards, parityShards int, password string) ([][]byte, error) {
 	if dataShards < 1 {
 		return nil, fmt.Errorf("dataShards must be >= 1, got %d", dataShards)
@@ -149,14 +150,16 @@ func Split(payload []byte, dataShards, parityShards int, password string) ([][]b
 	return result, nil
 }
 
-// Join reconstructs the original payload from available encoded shards.
-//
-// encodedShards must be a slice of length K+P where each element is either:
-//   - The encoded shard bytes (manifest header + shard data), or
-//   - nil for a missing/lost shard.
-//
-// At least K non-nil shards are required. Trailing bytes beyond the manifest
-// and shard data (e.g. beacon alignment padding) are ignored.
+/*
+Join reconstructs the original payload from available encoded shards.
+
+encodedShards must be a slice of length K+P where each element is either:
+  - the encoded shard bytes (manifest header + shard data), or
+  - nil for a missing/lost shard.
+
+At least K non-nil shards are required. Trailing bytes beyond the manifest
+and shard data (e.g. beacon alignment padding) are ignored.
+*/
 func Join(encodedShards [][]byte, password string) ([]byte, error) {
 	// Find first available shard to read the manifest parameters.
 	var ref *Manifest

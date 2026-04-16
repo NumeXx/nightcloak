@@ -15,8 +15,8 @@ type FileTimes struct {
 	ModTime    time.Time
 }
 
-// GetFileTimes captures the current atime and mtime of a file.
-// Supports high-precision timestamps on Linux and Darwin.
+/* GetFileTimes captures the current atime and mtime of a file.
+Supports high-precision timestamps on Linux and Darwin. */
 func GetFileTimes(path string) (FileTimes, error) {
 	fi, err := os.Stat(path)
 	if err != nil {
