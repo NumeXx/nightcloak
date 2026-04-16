@@ -23,34 +23,35 @@ import (
 	"github.com/NumeXx/nightcloak/pkg/shard"
 )
 
-	const version = "0.9.9"
+const version = "0.9.9"
 
-	const banner = `
-	╔╗╔╦═╗╔═╗╦ ╦╔╦╗╔═╗╦  ╔═╗╔═╗╦╔═
-	║║║║ ╠╣ ╦╠═╣ ║ ║  ║  ║ ║╠═╣╠╩╗
-	╝╚╝╩═╝╚═╝╩ ╩ ╩ ╚═╝╩═╝╚═╝╩ ╩╩ ╩
-	─── nightmare + cloak ── v%s ───
-	`
+const banner = `
+  ╔╗╔╦═╗╔═╗╦ ╦╔╦╗╔═╗╦  ╔═╗╔═╗╦╔═
+  ║║║║ ╠╣ ╦╠═╣ ║ ║  ║  ║ ║╠═╣╠╩╗
+  ╝╚╝╩═╝╚═╝╩ ╩ ╩ ╚═╝╩═╝╚═╝╩ ╩╩ ╩
+  ─── nightmare + cloak (by Doctor Who) ───
+  Created by: NumeX   |   Credit: Doctor Who (Jiab77)   |   https://www.thc.org
+`
 
-	func main() {
+func main() {
 	if len(os.Args) < 2 {
-	        printUsage()
-	        os.Exit(1)
+		printUsage()
+		os.Exit(1)
 	}
 
 	switch os.Args[1] {
 	case "hide":
-	        cmdHide(os.Args[2:])
+		cmdHide(os.Args[2:])
 	case "reveal":
-	        cmdReveal(os.Args[2:])
+		cmdReveal(os.Args[2:])
 	case "wipe":
 		cmdWipe(os.Args[2:])
 	case "exec":
-	        cmdExec(os.Args[2:])
+		cmdExec(os.Args[2:])
 	case "inspect":
-	        cmdInspect(os.Args[2:])
+		cmdInspect(os.Args[2:])
 	case "dump":
-	        cmdDump(os.Args[2:])
+		cmdDump(os.Args[2:])
 	case "split":
 		cmdSplit(os.Args[2:])
 	case "gather":
@@ -64,23 +65,23 @@ import (
 	case "git-wipe":
 		cmdGitWipe(os.Args[2:])
 	case "obfuscate":
-	        cmdObfuscate(os.Args[2:])
+		cmdObfuscate(os.Args[2:])
 	case "deobfuscate":
-	        cmdDeobfuscate(os.Args[2:])
+		cmdDeobfuscate(os.Args[2:])
 	case "-h", "--help", "help":
-	        printHelp()
+		printHelp()
 	case "-v", "--version", "version":
-	        fmt.Printf("nightcloak %s\n", version)
+		fmt.Printf("nightcloak %s\n", version)
 	case "--thc":
-	        printTHC()
+		printTHC()
 	default:
-	        die("unknown command: %s", os.Args[1])
+		die("unknown command: %s", os.Args[1])
 	}
-	}
+}
 
-	// ---------------------------------------------------------------------------
-	// hide: nightmarify → encrypt → embed
-	// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// hide: nightmarify -> encrypt -> embed
+// ---------------------------------------------------------------------------
 func cmdHide(args []string) {
 	var password, output string
 	var keepOriginal, compress, lock bool
@@ -1151,7 +1152,7 @@ func printTHC() {
 // ---------------------------------------------------------------------------
 
 func printUsage() {
-	fmt.Fprintf(os.Stderr, banner, version)
+	fmt.Fprint(os.Stderr, banner)
 	fmt.Fprintln(os.Stderr, `
   Usage: nightcloak <command> [options]
 
@@ -1175,7 +1176,7 @@ func printUsage() {
 }
 
 func printHelp() {
-	fmt.Fprintf(os.Stderr, banner, version)
+	fmt.Fprint(os.Stderr, banner)
 	fmt.Fprintln(os.Stderr, `
   Usage: nightcloak <command> [options]
 
