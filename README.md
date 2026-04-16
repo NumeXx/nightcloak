@@ -8,7 +8,7 @@ Port and modernization of [cloak.sh](https://github.com/Jiab77/cloak) and [night
 
 ## Screenshot
 
-![nightcloak](docs/screenshot.png)
+![nightcloak](assets/img/screenshot.png)
 
 ---
 
