@@ -171,7 +171,21 @@ The blob content is opaque v3 ciphertext. Even if retrieved, it is unreadable wi
 
 ## Usage
 
-### Build
+### Install
+
+```bash
+go install github.com/NumeXx/nightcloak/cmd/nightcloak@latest
+```
+
+Or a specific version:
+
+```bash
+go install github.com/NumeXx/nightcloak/cmd/nightcloak@v0.9.9
+```
+
+Pre-built binaries for linux/darwin/windows are available on the [releases page](https://github.com/NumeXx/nightcloak/releases).
+
+### Build from source
 
 ```bash
 CGO_ENABLED=0 go build -o nightcloak cmd/nightcloak/main.go

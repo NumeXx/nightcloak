@@ -23,7 +23,7 @@ import (
 	"strings"
 	"time"
 
-	"nightcloak/pkg/cloak/native"
+	"github.com/NumeXx/nightcloak/pkg/cloak/native"
 )
 
 const (

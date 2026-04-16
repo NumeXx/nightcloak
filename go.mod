@@ -1,4 +1,4 @@
-module nightcloak
+module github.com/NumeXx/nightcloak
 
 go 1.25.0
 

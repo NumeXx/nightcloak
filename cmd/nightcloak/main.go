@@ -15,12 +15,12 @@ import (
 	"sync"
 	"time"
 
-	"nightcloak/pkg/cloak"
-	"nightcloak/pkg/cloak/native"
-	"nightcloak/pkg/crypto"
-	"nightcloak/pkg/gitdrop"
-	"nightcloak/pkg/nightmare"
-	"nightcloak/pkg/shard"
+	"github.com/NumeXx/nightcloak/pkg/cloak"
+	"github.com/NumeXx/nightcloak/pkg/cloak/native"
+	"github.com/NumeXx/nightcloak/pkg/crypto"
+	"github.com/NumeXx/nightcloak/pkg/gitdrop"
+	"github.com/NumeXx/nightcloak/pkg/nightmare"
+	"github.com/NumeXx/nightcloak/pkg/shard"
 )
 
 	const version = "0.9.9"
