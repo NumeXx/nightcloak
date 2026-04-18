@@ -64,6 +64,12 @@ func main() {
 		cmdGitReveal(os.Args[2:])
 	case "git-wipe":
 		cmdGitWipe(os.Args[2:])
+	case "poly-hide":
+		cmdPolyHide(os.Args[2:])
+	case "poly-reveal":
+		cmdPolyReveal(os.Args[2:])
+	case "poly-wipe":
+		cmdPolyWipe(os.Args[2:])
 	case "obfuscate":
 		cmdObfuscate(os.Args[2:])
 	case "deobfuscate":
@@ -401,6 +407,158 @@ func cmdDeobfuscate(args []string) {
 		die("de-obfuscation failed: %v", err)
 	}
 	fmt.Print(result)
+}
+
+// ---------------------------------------------------------------------------
+// poly-hide / poly-reveal / poly-wipe: polyglot carrier embedding
+// ---------------------------------------------------------------------------
+
+func cmdPolyHide(args []string) {
+	var password, output string
+	var compress, lock bool
+	args = parseFlags(args, map[string]*string{
+		"-p": &password, "--password": &password,
+		"-o": &output, "--output": &output,
+	}, map[string]*bool{
+		"-z": &compress, "--compress": &compress,
+		"--lock": &lock,
+	})
+
+	if len(args) < 2 {
+		die("usage: nightcloak poly-hide <carrier.jpg|png|pdf> <payload|file|-> [-p password] [-o output]")
+	}
+
+	carrierPath := args[0]
+	payloadArg := args[1]
+	ext := filepath.Ext(carrierPath)
+
+	password = resolvePassword(password)
+
+	carrierData, err := os.ReadFile(carrierPath)
+	if err != nil {
+		die("reading carrier: %v", err)
+	}
+
+	payload, payloadName, _ := resolvePayload(payloadArg)
+	_ = payloadName
+
+	obfuscated := nightmare.NightmarifyBytes(payload)
+	encrypted, err := crypto.EncryptV3([]byte(obfuscated), password, compress, lock)
+	if err != nil {
+		die("encryption failed: %v", err)
+	}
+
+	xkey, err := crypto.ResolveXKey()
+	if err != nil {
+		die("KEY resolution failed: %v", err)
+	}
+	if xkey != nil {
+		encrypted, err = crypto.XEncrypt(encrypted, xkey)
+		if err != nil {
+			die("secondary encryption failed: %v", err)
+		}
+	}
+
+	polyData, err := native.PolyHide(carrierData, encrypted, ext)
+	if err != nil {
+		die("poly-hide failed: %v", err)
+	}
+
+	target := output
+	if target == "" {
+		target = carrierPath
+	}
+
+	times, _ := native.GetFileTimes(carrierPath)
+	if err := os.WriteFile(target, polyData, 0o644); err != nil {
+		die("writing output: %v", err)
+	}
+	native.RestoreFileTimes(target, times)
+	log("Polyglot created: %s (%d bytes)", target, len(polyData))
+}
+
+func cmdPolyReveal(args []string) {
+	var password, output string
+	args = parseFlags(args, map[string]*string{
+		"-p": &password, "--password": &password,
+		"-o": &output, "--output": &output,
+	}, map[string]*bool{})
+
+	if len(args) < 1 {
+		die("usage: nightcloak poly-reveal <polyglot> [-p password] [-o output]")
+	}
+
+	carrierPath := args[0]
+	password = resolvePassword(password)
+
+	data, err := os.ReadFile(carrierPath)
+	if err != nil {
+		die("reading file: %v", err)
+	}
+
+	encrypted, err := native.PolyReveal(data)
+	if err != nil {
+		die("poly-reveal failed: %v", err)
+	}
+
+	raw := encrypted
+
+	xkey, err := crypto.ResolveXKey()
+	if err != nil {
+		die("KEY resolution failed: %v", err)
+	}
+	if xkey != nil {
+		raw, err = crypto.XDecrypt(raw, xkey)
+		if err != nil {
+			die("secondary decryption failed: %v", err)
+		}
+	}
+
+	decrypted, err := crypto.Decrypt(raw, password)
+	if err != nil {
+		die("decryption failed: %v", err)
+	}
+
+	clearBytes, err := nightmare.DreamifyBytes(string(decrypted))
+	if err != nil {
+		die("de-obfuscation failed: %v", err)
+	}
+
+	if output != "" {
+		if err := os.WriteFile(output, clearBytes, 0o644); err != nil {
+			die("writing output: %v", err)
+		}
+		log("Extracted to %s (%d bytes)", output, len(clearBytes))
+	} else {
+		os.Stdout.Write(clearBytes)
+	}
+}
+
+func cmdPolyWipe(args []string) {
+	args = parseFlags(args, map[string]*string{}, map[string]*bool{})
+
+	if len(args) < 1 {
+		die("usage: nightcloak poly-wipe <polyglot>")
+	}
+
+	carrierPath := args[0]
+
+	data, err := os.ReadFile(carrierPath)
+	if err != nil {
+		die("reading file: %v", err)
+	}
+
+	wiped, err := native.PolyWipe(data)
+	if err != nil {
+		die("poly-wipe failed: %v", err)
+	}
+
+	times, _ := native.GetFileTimes(carrierPath)
+	if err := os.WriteFile(carrierPath, wiped, 0o644); err != nil {
+		die("writing output: %v", err)
+	}
+	native.RestoreFileTimes(carrierPath, times)
+	log("ZIP payload stripped from %s (%d → %d bytes)", carrierPath, len(data), len(wiped))
 }
 
 // ---------------------------------------------------------------------------
@@ -1180,6 +1338,9 @@ func printUsage() {
     dump          Extract and decrypt to stdout (raw, no de-obfuscation)
     obfuscate     Pure nightmare encoding (no encryption)
     deobfuscate   Reverse nightmare encoding
+    poly-hide     Embed payload as ZIP appended to JPEG/PNG/PDF (polyglot)
+    poly-reveal   Extract payload from a polyglot file
+    poly-wipe     Strip ZIP from polyglot, restore original carrier
 
   Run 'nightcloak <command> --help' or 'nightcloak help' for details.`)
 }
@@ -1296,6 +1457,37 @@ func printHelp() {
         Examples:
           nightcloak deobfuscate "Awt7AGMwAzZ7Mt=="
           echo "Awt7AGMwAzZ7Mt==" | nightcloak deobfuscate -
+
+    poly-hide <carrier.jpg|png|pdf> <payload|file|-> [flags]
+        Append an encrypted ZIP to a JPEG/PNG/PDF carrier. The result is
+        simultaneously a valid image/PDF and a valid ZIP archive. Viewers
+        parse the carrier normally; unzip/7z extracts the ciphertext.
+
+        -p, --password <pw>   Encryption password (prompted if omitted)
+        -o, --output <path>   Write polyglot to path (default: overwrite carrier)
+        -z, --compress        DEFLATE payload before encryption
+        --lock                Bind decryption to this machine's hardware identity
+
+        Examples:
+          nightcloak poly-hide photo.jpg secret.txt -p mypass
+          nightcloak poly-hide document.pdf payload.bin -p mypass -o poly.pdf
+
+    poly-reveal <polyglot> [flags]
+        Extract and decrypt the payload from a polyglot file.
+
+        -p, --password <pw>   Decryption password (prompted if omitted)
+        -o, --output <path>   Write to path instead of stdout
+
+        Examples:
+          nightcloak poly-reveal poly.jpg -p mypass
+          nightcloak poly-reveal poly.pdf -p mypass -o recovered.bin
+
+    poly-wipe <polyglot>
+        Strip the appended ZIP from a polyglot, restoring the original carrier.
+        No password required.
+
+        Examples:
+          nightcloak poly-wipe poly.jpg
 
   Requires: exiftool (most formats), ffmpeg/ffprobe (mp3/avi/ogg)`)
 }
