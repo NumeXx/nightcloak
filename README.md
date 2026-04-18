@@ -1,4 +1,6 @@
-# NightCloak
+<p align="center">
+  <img src="assets/img/nightcloak.svg" width="560" alt="nightcloak"/>
+</p>
 
 A statically-linked Go binary that unifies metadata steganography and string obfuscation into a single tool. NightCloak embeds encrypted payloads into file metadata (EXIF, ID3, XMP), plain text files, and polyglot archives through a multi-layer pipeline: obfuscation, authenticated encryption, and native binary injection. Supports distributed resiliency via Reed-Solomon erasure coding and CRC64 algebraic beacon discovery.
 
