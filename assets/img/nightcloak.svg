@@ -1,60 +1,35 @@
-<svg width="660" height="150" viewBox="0 0 660 150" fill="none" xmlns="http://www.w3.org/2000/svg">
+<svg width="400" height="116" viewBox="0 0 400 116" fill="none" xmlns="http://www.w3.org/2000/svg">
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@700&amp;display=swap');
-    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@800&amp;display=swap');
-
-    .name {
-      font-family: 'JetBrains Mono', 'Segoe UI', sans-serif;
-      font-weight: 800;
-      font-size: 58px;
-      fill: #FFFFFF;
-      letter-spacing: -2px;
-    }
-
-    .katakana {
-      font-family: 'Noto Sans JP', sans-serif;
-      font-weight: 700;
-      font-size: 20px;
-      fill: #00ADD8;
-      letter-spacing: 8px;
-    }
-
-    .hanko {
-      fill: #00ADD8;
-    }
-
-    .hanko-text {
-      font-family: 'Noto Sans JP', sans-serif;
-      font-size: 12px;
-      fill: #FFFFFF;
-      font-weight: bold;
-    }
-
-    .deco-line {
-      fill: #00ADD8;
-      opacity: 0.7;
-    }
-
-    .float {
-      animation: floating 4s infinite ease-in-out;
-    }
-
-    @keyframes floating {
-      0%, 100% { transform: translateY(0); }
-      50% { transform: translateY(-6px); }
-    }
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@700;800&amp;display=swap');
   </style>
 
-  <rect width="660" height="150" fill="#0D1117" rx="12"/>
+  <!-- window -->
+  <rect width="400" height="116" fill="#0D1117" rx="10"/>
+  <!-- title bar -->
+  <rect width="400" height="38" fill="#161B22" rx="10"/>
+  <rect y="30" width="400" height="8" fill="#161B22"/>
+  <!-- traffic lights -->
+  <circle cx="22" cy="19" r="6" fill="#FF5F57"/>
+  <circle cx="44" cy="19" r="6" fill="#FEBC2E"/>
+  <circle cx="66" cy="19" r="6" fill="#28C840"/>
 
-  <g class="float">
-    <rect x="40" y="35" width="40" height="40" class="hanko" rx="6"/>
-    <text x="60" y="56" text-anchor="middle" dominant-baseline="middle" class="hanko-text">暗影</text>
+  <!-- prompt -->
+  <text x="24" y="89"
+    font-family="JetBrains Mono, monospace"
+    font-weight="700"
+    font-size="40px"
+    fill="#4AFF91">❯</text>
 
-    <text x="95" y="52" class="katakana">ナイトクローク</text>
+  <!-- command -->
+  <text x="68" y="89"
+    font-family="JetBrains Mono, monospace"
+    font-weight="800"
+    font-size="40px"
+    fill="#FFFFFF"
+    letter-spacing="-1px">nightcloak</text>
 
-    <text x="90" y="108" class="name">nightcloak</text>
-
-    <rect x="92" y="118" width="370" height="3" class="deco-line"/>
-  </g>
+  <!-- blinking cursor -->
+  <rect x="326" y="57" width="22" height="36" fill="#4AFF91" rx="2">
+    <animate attributeName="opacity" values="1;0;1" dur="1.2s" repeatCount="indefinite"/>
+  </rect>
 </svg>
