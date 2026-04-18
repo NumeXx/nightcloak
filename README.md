@@ -396,6 +396,12 @@ go test ./... -v
 
 ---
 
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=NumeXx/nightcloak&type=Date)](https://star-history.com/#NumeXx/nightcloak&Date)
+
+---
+
 ## Disclaimer
 
 This tool is intended for authorized security testing, research, and educational purposes. Use it responsibly and in compliance with applicable laws.
