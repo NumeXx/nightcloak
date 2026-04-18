@@ -398,7 +398,13 @@ go test ./... -v
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=NumeXx/nightcloak&type=Date)](https://star-history.com/#NumeXx/nightcloak&Date)
+<a href="https://star-history.com/#NumeXx/nightcloak&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=NumeXx/nightcloak&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=NumeXx/nightcloak&type=Date" />
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=NumeXx/nightcloak&type=Date" />
+  </picture>
+</a>
 
 ---
 
