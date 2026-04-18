@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.0.0 — 2026-04-18
+
+- `poly-hide`: append encrypted payload as a ZIP archive to JPEG/PNG/PDF carriers
+- Result is simultaneously a valid image/PDF and a valid ZIP — viewers parse normally, `unzip`/`7z` extracts ciphertext
+- `poly-reveal`: extract and decrypt payload from a polyglot file
+- `poly-wipe`: strip the ZIP from a polyglot, restoring the original carrier (no password required)
+- ZIP offset patching via EOCD + central directory rebase, making `archive/zip` read correctly after carrier prefix
+- Full encryption pipeline: nightmarify + Argon2id/ChaCha20-Poly1305 + optional XChaCha20 secondary layer
+- Carrier coverage now complete: metadata injection (PNG/JPEG/MP3/PDF), Unicode zero-width (.txt/.md/.html/.json/.xml/.csv), polyglot ZIP (JPEG/PNG/PDF)
+
+---
+
 ## v0.9.9 — 2026-04-16
 
 - Unicode zero-width carrier: `.txt`, `.md`, `.html`, `.htm`, `.json`, `.xml`, `.csv`
