@@ -1,6 +1,6 @@
 # NightCloak
 
-A statically-linked Go binary that unifies metadata steganography and string obfuscation into a single tool. NightCloak embeds encrypted payloads into file metadata (EXIF, ID3, XMP) and plain text files through a multi-layer pipeline: obfuscation, authenticated encryption, and native binary injection. Supports distributed resiliency via Reed-Solomon erasure coding and CRC64 algebraic beacon discovery.
+A statically-linked Go binary that unifies metadata steganography and string obfuscation into a single tool. NightCloak embeds encrypted payloads into file metadata (EXIF, ID3, XMP), plain text files, and polyglot archives through a multi-layer pipeline: obfuscation, authenticated encryption, and native binary injection. Supports distributed resiliency via Reed-Solomon erasure coding and CRC64 algebraic beacon discovery.
 
 Port and modernization of [cloak.sh](https://github.com/Jiab77/cloak) and [nightmare](https://codeberg.org/Jiab77/nightmare) by **Doctor Who (Jiab77)**. The core logic, wire format philosophy, and operational model are preserved. The implementation is new.
 
@@ -45,6 +45,7 @@ inject into carrier                     ROT13/5 -> base64 -> hex -> payload
 | `.pdf` (flat XREF) | Native /Info purge + rewrite | No |
 | `.pdf` (1.5+ / encrypted) | exiftool fallback | Yes |
 | `.txt` / `.md` / `.html` / `.htm` / `.json` / `.xml` / `.csv` | Native Unicode zero-width chars | No |
+| `.jpg` / `.jpeg` / `.png` / `.pdf` (`poly-hide`) | Appended ZIP polyglot | No |
 | `.avi` / `.ogg` | ffmpeg FFMETADATA1 | Yes |
 | `.tiff` / others | exiftool | Yes |
 
@@ -72,6 +73,30 @@ so CRC64(file) == beacon target       -> nightmare decode -> payload
 ```
 
 Any K of K+P carriers recover the original payload. The beacon enables stateless discovery across any directory without a manifest or filename list.
+
+### Polyglot Pipeline
+
+```
+poly-hide                                   poly-reveal
+─────────                                   ───────────
+payload                                     polyglot file
+  │                                               │
+  ▼                                               ▼
+nightmare + Argon2id + ChaCha20         scan from end for ZIP EOCD
+  │                                               │
+  ▼                                               ▼
+create ZIP (STORE, uncompressed)        archive/zip extracts "data" entry
+  │                                               │
+  ▼                                               ▼
+patch EOCD + central dir offsets        Argon2id + ChaCha20 decrypt
+  +len(carrier)                                   │
+  │                                               ▼
+  ▼                                    nightmare decode -> payload
+[carrier bytes trimmed to EOF]
+  + ZIP bytes
+```
+
+JPEG/PNG/PDF parsers stop at `FFD9` / `IEND` / `%%EOF`. ZIP readers scan backward for EOCD. One file, two valid parsers. Carrier is unchanged from the perspective of image viewers and PDF readers.
 
 ### Git Dead Drop Pipeline
 
@@ -157,6 +182,15 @@ All obfuscation and cryptographic operations run natively in Go. For core format
 
 The blob content is opaque v3 ciphertext. Even if retrieved, it is unreadable without the password.
 
+### Polyglot Carrier (ZIP Append)
+
+`poly-hide` appends an encrypted ZIP archive to the end of a JPEG, PNG, or PDF carrier. The result is simultaneously:
+
+- A **valid image/PDF**: viewers, browsers, and renderers parse the carrier normally and stop at the format's end-of-content marker.
+- A **valid ZIP**: `unzip`, `7z`, and `file` recognize the ZIP structure at the file end. The ZIP contains a single entry with opaque v3 ciphertext, unreadable without the password.
+
+`poly-wipe` strips the ZIP and restores the original carrier bytes without a password. Timestamps are preserved.
+
 ### Surgical Wipe
 
 `wipe` removes an embedded payload and restores the carrier to a clean state. Format-aware: PNG drops the tEXt chunk, JPEG strips the APP1 segment, MP3 removes the TXXX frame, PDF purge-rewrites without `/Keywords`, text files strip the invisible char block. Carrier timestamps are restored after wipe.
@@ -180,7 +214,7 @@ go install github.com/NumeXx/nightcloak/cmd/nightcloak@latest
 Or a specific version:
 
 ```bash
-go install github.com/NumeXx/nightcloak/cmd/nightcloak@v0.9.9
+go install github.com/NumeXx/nightcloak/cmd/nightcloak@v1.0.0
 ```
 
 Pre-built binaries for linux/darwin/windows are available on the [releases page](https://github.com/NumeXx/nightcloak/releases).
@@ -262,6 +296,27 @@ nightcloak split secret.bin ./media/ -n 6 -k 4
 nightcloak gather ./media/ -o recovered.bin
 ```
 
+### Polyglot Carrier (ZIP Append)
+
+```bash
+# Embed in JPEG, result is valid JPEG and valid ZIP
+nightcloak poly-hide photo.jpg secret.txt -p mypass
+
+# Embed in PDF
+nightcloak poly-hide document.pdf payload.bin -p mypass -o poly.pdf
+
+# Reveal
+nightcloak poly-reveal poly.jpg -p mypass
+nightcloak poly-reveal poly.pdf -p mypass -o recovered.bin
+
+# Verify with standard tools
+file poly.jpg          # JPEG image data, ...
+unzip -l poly.jpg      # Archive: poly.jpg  Length: ...
+
+# Restore original carrier (no password)
+nightcloak poly-wipe poly.jpg
+```
+
 ### Git Dead Drop
 
 ```bash
@@ -327,7 +382,7 @@ Core formats (PNG, JPEG, MP3, PDF flat XREF, all text formats) and the full dist
 go test ./... -v
 ```
 
-122 tests across five packages (`nightmare`, `crypto`, `cloak`, `cloak/native`, `shard`) covering byte-level integrity, cryptographic roundtrips, Reed-Solomon recovery, CRC64 algebraic inversion, and forensic cleanliness.
+131 tests across five packages (`nightmare`, `crypto`, `cloak`, `cloak/native`, `shard`) covering byte-level integrity, cryptographic roundtrips, Reed-Solomon recovery, CRC64 algebraic inversion, polyglot round-trip, and forensic cleanliness.
 
 ---
 
