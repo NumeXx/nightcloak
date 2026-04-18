@@ -222,15 +222,15 @@ Pre-built binaries for linux/darwin/windows are available on the [releases page]
 ### Build from source
 
 ```bash
-CGO_ENABLED=0 go build -o nightcloak cmd/nightcloak/main.go
+CGO_ENABLED=0 go build -o nightcloak ./cmd/nightcloak/
 ```
 
 Cross-compile without CGO:
 
 ```bash
-GOOS=linux   GOARCH=amd64 CGO_ENABLED=0 go build ./...
-GOOS=darwin  GOARCH=arm64 CGO_ENABLED=0 go build ./...
-GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build ./...
+GOOS=linux   GOARCH=amd64 CGO_ENABLED=0 go build -o nightcloak-linux-amd64   ./cmd/nightcloak/
+GOOS=darwin  GOARCH=arm64 CGO_ENABLED=0 go build -o nightcloak-darwin-arm64  ./cmd/nightcloak/
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o nightcloak-windows-amd64.exe ./cmd/nightcloak/
 ```
 
 ### Single-Carrier (Images, Audio, PDF)
@@ -270,7 +270,7 @@ nightcloak hide README.md secret.txt -p mypass
 nightcloak reveal README.md -p mypass
 
 # Wipe (no password required, purely structural)
-nightcloak wipe README.md -p mypass
+nightcloak wipe README.md
 
 # Works with any text format
 nightcloak hide config.json payload.bin -p mypass
